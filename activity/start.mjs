@@ -180,7 +180,59 @@ ${stable ? '' : `
 
 ${colour.gold}${'='.repeat(68)}${colour.off}
 `);
+    // Checked after the banner rather than before it, so the address is on
+    // screen either way and any warning lands directly beneath it.
+    verifyServesToBrowser(host);
   }, 1200);
+}
+
+/**
+ * Check that the tunnel actually serves the app to a *browser*.
+ *
+ * Discord loads an Activity in an embedded browser, and some tunnels answer
+ * browsers differently from anything else. ngrok's free tier is the case that
+ * cost hours: it serves a "You are about to visit..." interstitial to any
+ * request with a browser User-Agent, so the Activity received a warning page
+ * and rendered white while every other check looked perfect - the server was
+ * healthy, the tunnel was up, and `curl` fetched the real page, because curl is
+ * not a browser and so was never shown the interstitial.
+ *
+ * Hence the User-Agent here. Checking with the default one reproduces exactly
+ * the blind spot that made the fault so hard to see.
+ *
+ * @param {string} host Hostname, without a scheme.
+ */
+async function verifyServesToBrowser(host) {
+  const browserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  let body;
+  try {
+    const response = await fetch(`https://${host}/`, {
+      headers: { 'User-Agent': browserAgent, Accept: 'text/html' },
+      redirect: 'follow',
+    });
+    body = await response.text();
+  } catch {
+    // The tunnel may simply not be ready yet. Not worth alarming anyone over.
+    return;
+  }
+
+  if (body.includes('KAM Media Player')) return;
+
+  const interstitial = /ngrok|you are about to visit|tunnel not found/i.test(body);
+  console.error(`
+${colour.bold}WARNING: that address does not serve the Activity to a browser.${colour.off}
+
+  A browser request returned ${body.length} bytes without the app in it${
+  interstitial ? ',\n  and it looks like a tunnel interstitial page' : ''}.
+
+  Discord loads the Activity in an embedded browser, so it will see the same
+  thing and show a white screen. The server itself is fine - this is the
+  tunnel answering browsers differently.
+${provider === 'ngrok' ? `
+  ngrok's free tier does this and cannot be configured out of it. Set
+  TUNNEL_PROVIDER=quick in .env to use a Cloudflare tunnel instead.` : ''}
+`);
 }
 
 /**
