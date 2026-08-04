@@ -1319,6 +1319,49 @@
     <p class="fine">Server is running and reachable.</p>
   </section>
 
+  <!--
+    Show failures on the page instead of leaving a white screen.
+
+    An Activity runs inside an iframe in the Discord client, where there is no
+    address bar, no obvious console, and nothing to click. A module that throws
+    before it can render anything therefore looks identical to a broken tunnel,
+    a stale URL mapping and a server that never started - which is exactly how
+    an evening gets spent eliminating things that were never wrong.
+
+    Deliberately inline and before the module, so it is already listening if the
+    module itself fails to parse or throws while evaluating.
+  -->
+  <script>
+    (function reportFailures() {
+      var shown = false;
+      function show(what, detail) {
+        if (shown) return;
+        shown = true;
+        var status = document.getElementById('status');
+        if (!status) return;
+        status.textContent = what + ': ' + detail;
+        status.style.whiteSpace = 'pre-wrap';
+        status.style.color = '#ff8a8a';
+        status.style.maxWidth = '46ch';
+        status.style.textAlign = 'center';
+      }
+      window.addEventListener('error', function (event) {
+        var error = event.error || {};
+        // `frame_id` is the one expected failure: it means the page was opened
+        // in an ordinary browser rather than launched inside Discord.
+        if (/frame_id/.test(error.message || event.message || '')) {
+          show('Not running inside Discord',
+            'Open this as an Activity from a voice channel rather than in a browser tab.');
+          return;
+        }
+        show('Startup failed', error.message || event.message || 'unknown error');
+      });
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event.reason || {};
+        show('Startup failed', reason.message || String(reason));
+      });
+    }());
+  </script>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
