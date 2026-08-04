@@ -90,7 +90,7 @@ card and nothing to buy.
 1. Create an account at <https://dashboard.ngrok.com> and install the agent:
 
 ```powershell
-cd "C:\Projects\Discord Media Player\activity"; winget install --id ngrok.ngrok
+cd "C:\Projects\Discord Media Player\activity"; winget install --id Ngrok.Ngrok -e
 ```
 
 2. Authenticate it once, with the token from your dashboard:

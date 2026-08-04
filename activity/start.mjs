@@ -18,7 +18,7 @@
  */
 
 import 'dotenv/config';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import process from 'node:process';
 
@@ -31,6 +31,20 @@ const colour = process.stdout.isTTY
 const children = [];
 
 /**
+ * Set when the tunnel reports a failure.
+ *
+ * Declared up here rather than beside the announcer because `start` closes over
+ * it and is called before that point in the file.
+ *
+ * The timed announcements below exist because an agent does not always print a
+ * line worth matching on. Without this they fire regardless - so a run whose
+ * tunnel failed authentication still ended with a gold banner saying the URL
+ * was ready, which sends you looking for the fault everywhere except where it
+ * actually is.
+ */
+let tunnelFailed = false;
+
+/**
  * Start a child process and prefix its output.
  *
  * @param {string} label Shown before each line.
@@ -39,13 +53,28 @@ const children = [];
  * @param {(line: string) => void} [onLine] Called for each output line.
  * @returns {import('node:child_process').ChildProcess}
  */
-function start(label, command, args, onLine) {
-  const child = spawn(command, args, { shell: process.platform === 'win32' });
+function start(label, command, args, onLine, { shell } = {}) {
+  // The shell is only wanted for the tunnel agents, which are found on PATH and
+  // may be .cmd shims on Windows. It is actively harmful for the server: with
+  // `shell: true` the arguments are concatenated rather than escaped, so
+  // `process.execPath` - normally `C:\Program Files\nodejs\node.exe` - is split
+  // at the space and cmd reports `'C:\Program' is not recognized`. The server
+  // then never starts at all, while the tunnel carries on as though it had.
+  const useShell = shell ?? false;
+  // Quoted anyway, so a tunnel binary installed under a path with a space in it
+  // fails no differently.
+  const safeCommand = useShell && /\s/.test(command) ? `"${command}"` : command;
+  const child = spawn(safeCommand, args, { shell: useShell });
   children.push(child);
 
   const emit = (chunk) => {
     for (const line of String(chunk).split('\n')) {
       if (!line.trim()) continue;
+      // A tunnel that has reported an error is not going to serve traffic, so
+      // the success banner must not be printed over the top of it.
+      if (label === 'tunnel' && /\bERROR\b|ERR_NGROK|authentication failed/i.test(line)) {
+        tunnelFailed = true;
+      }
       onLine?.(line);
       console.log(`${colour.dim}[${label}]${colour.off} ${line}`);
     }
@@ -125,7 +154,7 @@ let announced = false;
  * @param {boolean} stable Whether it survives a restart.
  */
 function announce(host, stable) {
-  if (announced) return;
+  if (announced || tunnelFailed) return;
   announced = true;
   // Delayed so it lands below the tunnel's own banner rather than being
   // scrolled away by it.
@@ -155,6 +184,34 @@ ${colour.gold}${'='.repeat(68)}${colour.off}
 }
 
 /**
+ * Which flag this ngrok build wants for a static domain.
+ *
+ * Asked rather than assumed, because the answer has changed twice and the agent
+ * updates itself. Measured on two builds of the same major version:
+ *
+ *   3.3.1    --domain, and --url is not recognised
+ *   3.39.10  --url, and --domain is gone
+ *
+ * Hardcoding either one breaks on the other, and the failure is a wall of usage
+ * text that never says which flag it wanted. One extra process at startup is a
+ * cheap price for never being wrong about it again.
+ *
+ * @returns {Promise<string>}
+ */
+function ngrokDomainFlag() {
+  return new Promise((resolve) => {
+    execFile('ngrok', ['http', '--help'], { shell: true }, (error, stdout, stderr) => {
+      const help = `${stdout ?? ''}${stderr ?? ''}`;
+      // `--url` first: it is the current spelling, and `--domain` is the one
+      // being retired. If neither is found - an agent too broken to run - the
+      // current spelling is the better guess.
+      if (help.includes('--domain') && !help.includes('--url')) return resolve('--domain');
+      resolve('--url');
+    });
+  });
+}
+
+/**
  * How to get a public HTTPS address.
  *
  * The default costs nothing and needs no account, but Cloudflare assigns a
@@ -166,7 +223,7 @@ const provider = (process.env.TUNNEL_PROVIDER ?? 'quick').toLowerCase();
 const tunnelDomain = process.env.TUNNEL_DOMAIN ?? '';
 const tunnelName = process.env.TUNNEL_NAME ?? '';
 
-setTimeout(() => {
+setTimeout(async () => {
   if (provider === 'ngrok') {
     if (!tunnelDomain) {
       console.error(`${colour.bold}TUNNEL_PROVIDER=ngrok needs TUNNEL_DOMAIN.${colour.off}`);
@@ -175,20 +232,27 @@ setTimeout(() => {
       console.error('  TUNNEL_DOMAIN=kam-media-player.ngrok-free.app');
       shutdown(1);
     }
-    // `--url` is the current flag; ngrok before 3.19 spelt it `--domain`. The
-    // error handler below names that, because the failure is otherwise just
-    // "unknown flag" with no hint about the version.
-    start('tunnel', 'ngrok', ['http', `--url=${tunnelDomain}`, String(port)], (line) => {
+    const flag = await ngrokDomainFlag();
+    start('tunnel', 'ngrok', ['http', `${flag}=${tunnelDomain}`, String(port)], (line) => {
       if (/unknown flag|unknown shorthand|flag provided but not defined/i.test(line)) {
-        console.error(`\n${colour.bold}That ngrok build does not know --url.${colour.off}`);
-        console.error('It is older than 3.19; upgrade ngrok, or change the flag in'
-          + ' start.mjs to --domain=.');
+        console.error(`\n${colour.bold}ngrok rejected ${flag}.${colour.off}`);
+        console.error('The flag was chosen from `ngrok http --help`, so this build'
+          + ' reports one spelling and accepts another. Please report it.');
+      }
+      // ngrok states the required version rather than making you guess, so the
+      // message is worth surfacing above its own wall of usage text.
+      if (/ERR_NGROK_121|too old/i.test(line)) {
+        console.error(`\n${colour.bold}The ngrok agent is too old for your account.${colour.off}`);
+        console.error('Update it, then run this again:  ngrok update');
       }
       if (/started tunnel|url=https:\/\//i.test(line)) announce(tunnelDomain, true);
-    });
+    }, { shell: true });
     // ngrok's terminal UI does not always print a parseable line, so the
-    // address is announced regardless once it has had time to connect. It is
-    // known in advance here - that is the entire point of a static domain.
+    // address is announced once it has had time to connect - it is known in
+    // advance, which is the entire point of a static domain. Suppressed if the
+    // agent has reported a failure: announcing a working URL over the top of an
+    // authentication error is worse than saying nothing, because it sends you
+    // looking for the fault everywhere except where it is.
     setTimeout(() => announce(tunnelDomain, true), 3000);
     return;
   }
@@ -207,7 +271,7 @@ setTimeout(() => {
       if (/registered tunnel connection|connection.*registered/i.test(line)) {
         announce(tunnelDomain, true);
       }
-    });
+    }, { shell: true });
     setTimeout(() => announce(tunnelDomain, true), 4000);
     return;
   }
