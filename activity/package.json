@@ -1,0 +1,37 @@
+{
+  "name": "kam-media-player",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Self-hosted Discord media player Activity with audio-reactive visuals.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n vite,server -c cyan,green \"vite build --watch\" \"node server.js\"",
+    "build": "vite build",
+    "start": "node server.js",
+    "test": "npm run audit && node test/client.test.mjs && node test/transport.test.mjs && node test/stickmen.test.mjs && node test/visuals.test.mjs && node test/resolve.test.mjs && node test/config.test.mjs && node test/providers-config.test.mjs && node test/imageproxy.test.mjs && node test/cache.test.mjs && node test/auth.test.mjs && node test/analyser.test.mjs && node test/queue.test.mjs && node test/decks.test.mjs && node test/favourites.test.mjs && node test/artists.test.mjs && node test/ratelimit.test.mjs && node test/soundcloud.test.mjs",
+    "audit": "node audit.mjs client/main.js client/registry.js client/preview.js client/artists.js client/transport.js client/visualizer.js client/stickmen.js client/painter.js client/clock.js client/visuals.js client/visuals2.js server.js server/config.js server/queue.js server/decks.js server/player.js server/providers.js server/embeds.js server/resolve.js server/imageproxy.js server/cache.js server/analyser.js server/auth.js",
+    "tunnel": "node start.mjs",
+    "go": "npm run build && node start.mjs",
+    "preview": "vite --port 4173 --strictPort"
+  },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.0.0",
+    "@discordjs/voice": "^0.19.2",
+    "compression": "^1.8.1",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "libsodium-wrappers": "^0.7.15",
+    "opusscript": "^0.0.8"
+  },
+  "devDependencies": {
+    "acorn": "^8.14.0",
+    "acorn-walk": "^8.3.4",
+    "concurrently": "^9.0.0",
+    "vite": "^7.3.6"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

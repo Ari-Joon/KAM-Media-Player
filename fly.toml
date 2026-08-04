@@ -1,0 +1,30 @@
+# Fly.io deployment.
+#
+# `min_machines_running = 1` and `auto_stop_machines = false` are the two
+# load-bearing lines: a Discord bot holds a persistent gateway connection and a
+# live voice stream, so it can never scale to zero. Platforms that sleep idle
+# apps will silently drop the bot offline.
+app = "replace-with-your-unique-fly-app-name"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+# Score cache survives redeploys, so the same track does not need to be analysed
+# again after every release.
+[mounts]
+  source = "kam_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 1GB covers librosa's peak during full-track analysis alongside the voice
+  # stream. Dropping to 512MB risks the analyser being killed mid-track.
+  memory = "1gb"

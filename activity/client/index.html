@@ -1,0 +1,1324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KAM Media Player</title>
+<style>
+  /* The field is the interface. Chrome is deliberately desaturated and thin so
+     nothing competes with the colour coming out of the shader. */
+  :root {
+    /* Interface scale and font, both viewer-chosen and applied through these
+       two variables so no rule needs to know they are adjustable. */
+    --ui-scale: 1;
+    --ui-size: 14px;
+    --ui-font: var(--sans);
+
+    --ink: #07070b;
+    --trace: #8fa3ad;
+    --trace-dim: #4a555c;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", monospace;
+    --sans: "gg sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--ink);
+    color: var(--trace);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  #stage, #stage-2d {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* An explicit `display` beats the user-agent's `[hidden] { display: none }`,
+     so the hidden state must be restated or both canvases draw at once - which
+     made the mode toggle appear to do nothing. */
+  #stage[hidden], #stage-2d[hidden] { display: none; }
+
+  .readout {
+    position: fixed;
+    left: 0;
+    right: 0;
+    padding: 14px 18px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    /* Readable over any frame the shader might produce underneath. */
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+
+  #bottom { bottom: 0; color: var(--trace-dim); }
+
+  #title {
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: none;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #telemetry { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  /* Status sits centre-stage while there is nothing to look at, and gets out
+     of the way the moment playback starts. */
+  #status {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    padding: 32px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.7;
+    letter-spacing: 0.06em;
+    max-width: 34ch;
+    margin: 0 auto;
+  }
+
+  #status:empty { display: none; }
+
+  /* Non-fatal warning strip, e.g. when audio could not be hosted in-app. */
+  #notice {
+    position: fixed;
+    bottom: 46px;
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 8px 18px;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #ffd21a;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+
+  /* --- Visualisation picker ---------------------------------------------- */
+
+  #visual-picker {
+    position: fixed;
+    left: max(16px, env(safe-area-inset-left, 0px));
+    bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    z-index: 7;
+  }
+
+  #visual-button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 8, 12, 0.72);
+    backdrop-filter: blur(12px);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #visual-button:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.45); }
+
+  /* Opens upward: the button sits at the bottom of the frame, and a menu
+     dropping down would be clipped by the viewport. */
+  #visual-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    min-width: 170px;
+    /* Bounded to the viewport, and scrolls once it no longer fits.
+
+       The menu is anchored above its button with no height limit, and every
+       entry is sized from --ui-scale. Past 100% interface size the list of
+       twenty-two visualisations grows taller than the window and runs off the
+       top of the screen, where there is nothing to scroll and the entries
+       simply cannot be reached. Capping against the viewport keeps the whole
+       list usable at any scale.
+
+       vh is the right unit here because the scale multiplies font-size rather
+       than applying a transform, so the viewport is still the real viewport. */
+    max-height: 62vh;
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    display: grid;
+    gap: 2px;
+    background: rgba(8, 8, 12, 0.90);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+  }
+
+  #visual-menu[hidden] { display: none; }
+
+  .picker-row { display: flex; gap: 6px; align-items: stretch; }
+
+  #search-launcher {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    z-index: 7;
+  }
+
+  /* Always visible, unlike the transport which fades after a few seconds. */
+  #t-search {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 8, 12, 0.72);
+    backdrop-filter: blur(12px);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #t-search:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.45); }
+
+  #settings-button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 8, 12, 0.72);
+    backdrop-filter: blur(12px);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(11px * var(--ui-scale));
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #settings-button:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.45); }
+
+  #settings-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    width: 232px;
+    /* Same viewport bound as #visual-menu, for the same reason: the font list
+       grows with --ui-scale and overflows the top of the window past 100%. */
+    max-height: 62vh;
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+    background: rgba(8, 8, 12, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+  }
+
+  #settings-menu[hidden] { display: none; }
+
+  #settings-menu h3 {
+    margin: 0 0 8px;
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #ffd21a;
+  }
+
+  #settings-menu h3 + .row + h3 { margin-top: 14px; }
+
+  #settings-menu .row { display: flex; align-items: center; gap: 10px; }
+
+  #settings-menu input[type="range"] { flex: 1; accent-color: #ffd21a; }
+
+  #ui-scale-value {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--trace);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  #settings-menu .fonts { display: grid; gap: 2px; }
+
+  #settings-menu .fonts button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--trace);
+    font-size: 12px;
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #settings-menu .fonts button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+  #settings-menu .fonts button.active { color: #ffd21a; background: rgba(255, 210, 26, 0.10); }
+
+  #visual-menu button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(11px * var(--ui-scale));
+    letter-spacing: 0.06em;
+    text-align: left;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #visual-menu button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+  #visual-menu button.active { color: #ffd21a; background: rgba(255, 210, 26, 0.10); }
+
+  /* --- Transport --------------------------------------------------------- */
+
+  #transport {
+    position: fixed;
+    left: 50%;
+    /* Clear of the home indicator on phones that have one. */
+    bottom: max(20px, env(safe-area-inset-bottom, 0px));
+    /* Grows with the text rather than clipping it. */
+    max-height: 80vh;
+    transform: translateX(-50%);
+    width: min(620px, calc(100% - 32px));
+    padding: 16px 20px 14px;
+    border-radius: 16px;
+    background: rgba(10, 10, 14, 0.80);
+    backdrop-filter: blur(20px) saturate(1.2);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    display: grid;
+    gap: 12px;
+    z-index: 5;
+  }
+
+  #transport[hidden] { display: none; }
+
+  /* With nothing playing, the controls that need a track are dimmed and inert,
+     but search, favourites and the queue stay usable. */
+  body.idle-transport #t-prev,
+  body.idle-transport #t-toggle,
+  body.idle-transport #t-next,
+  body.idle-transport #t-stop,
+  body.idle-transport #t-fav,
+  body.idle-transport #t-scrub {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  body.idle-transport #t-title::after { content: 'Nothing playing'; }
+
+  /* Auto-hide.
+     Asymmetric timing on purpose: appearing is 350ms so the bar feels responsive
+     when you reach for it, disappearing is 500ms so it drifts away rather than
+     snapping out. The transform must repeat the centring translate, or the bar
+     jumps to the left edge the moment the class is applied. */
+  #transport {
+    transition: opacity 350ms ease, transform 350ms ease;
+  }
+
+  #transport.idle {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px);
+    pointer-events: none;
+    transition: opacity 500ms ease, transform 500ms ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #transport, #transport.idle { transform: translateX(-50%); }
+  }
+
+  #transport .meta {
+    display: flex;
+    justify-content: space-between;
+    /* Centre rather than baseline. Baseline alignment on two elements of
+       different size makes the row's height depend on the larger one's
+       descenders, which at high zoom pushed the row into the scrub bar below -
+       the artist name appeared to have the progress line running through it. */
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    /* A predictable row height regardless of text size, so nothing below can be
+       overlapped however far the interface is scaled. */
+    min-height: calc(var(--ui-size) * 1.5);
+    /* Without this the row can grow past the bar and the fade mask ends up
+       cutting the title mid-glyph at whatever width the flex line settled on. */
+    overflow: hidden;
+  }
+
+  /* A window the title scrolls inside. Overflow is hidden here rather than on
+     the text itself, because a translated element still needs a clip boundary. */
+  #t-title-window {
+    position: relative;
+    overflow: hidden;
+    /* min-width:0 is what actually lets a flex item shrink below its content
+       width; without it the window never gets smaller and the title escapes. */
+    min-width: 0;
+    flex: 1 1 auto;
+    cursor: pointer;
+    /* Only the trailing edge fades by default. A leading fade was clipping the
+       first characters of every title even when parked at the start, which is
+       the "eaten text" - the left fade is added by script only while scrolled
+       away from zero. */
+    mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px),
+      transparent 100%);
+  }
+
+  #t-title-window.scrolled {
+    mask-image: linear-gradient(90deg, transparent 0, #000 16px,
+      #000 calc(100% - 16px), transparent 100%);
+  }
+
+  #t-title {
+    display: inline-block;
+    color: #fff;
+    font-weight: 600;
+    font-family: var(--ui-font);
+    font-size: var(--ui-size);
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+    will-change: transform;
+  }
+
+  #t-artist {
+    color: var(--trace-dim);
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.86);
+    white-space: nowrap;
+    /* Capped and allowed to shrink: a long channel name previously took as much
+       room as it wanted and pushed the title out of the bar entirely. */
+    flex: 0 1 auto;
+    max-width: 38%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #transport .scrubline {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--trace-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Generous hit area around a thin bar: the visible track is 4px, but the
+     grabbable region is 16px so it can be dragged without precision. */
+  #t-scrub {
+    position: relative;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  #t-scrub::before {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  #t-fill {
+    position: relative;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #ff9d00, #ffd21a);
+    width: 0;
+  }
+
+  #t-fill::after {
+    content: '';
+    position: absolute;
+    right: -6px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffd21a;
+    box-shadow: 0 0 0 3px rgba(255, 210, 26, 0.22);
+    transform: translateY(-50%);
+    transition: transform 120ms ease;
+  }
+
+  #t-scrub:hover #t-fill::after { transform: translateY(-50%) scale(1.25); }
+
+  #transport .buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #transport .spacer { flex: 1; }
+
+  /* Touch targets. Anything below about 44px is difficult to hit reliably on a
+     phone, and several controls here were 26px. Applied only where hover is
+     unavailable, so desktop keeps its more compact layout. */
+  @media (hover: none) {
+    #transport button { min-width: 42px; min-height: 42px; }
+    #transport .chip { min-height: 42px; padding: 10px 13px; }
+    #queue-close, #fav-close, #search-close { width: 38px; height: 38px; font-size: 20px; }
+    #queue-list .tools button { width: 32px; height: 32px; font-size: 13px; }
+    /* Reorder controls are hover-revealed on desktop; on touch there is no
+       hover, so they have to be permanently visible. */
+    #queue-list .tools { opacity: 1; }
+    #visual-menu button, #settings-menu .fonts button { padding: 11px 12px; }
+    #fav-list li, #search-results li { padding: 11px 6px; }
+    /* Side panels take the full width: 340px on a phone leaves the list
+       unreadably narrow. */
+    #queue-panel, #fav-panel, #search-panel { width: min(340px, 100%); }
+  }
+
+  #transport button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1;
+    padding: 9px 11px;
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
+  }
+
+  #transport button:hover {
+    background: rgba(255, 255, 255, 0.13);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.20);
+  }
+
+  #transport button.primary {
+    background: #ffd21a;
+    border-color: #ffd21a;
+    color: #08080c;
+    padding: 9px 17px;
+    font-size: 14px;
+  }
+
+  #transport button.primary:hover { background: #ffdd4d; color: #08080c; }
+
+  /* Chips carry a glyph plus a word. An icon alone cannot distinguish
+     "looping this track" from "looping the queue", which was the whole
+     complaint - so the state is spelled out. */
+  #transport button.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 11px;
+  }
+
+  #transport .chip .glyph { font-size: 12px; line-height: 1; }
+
+  #transport .chip .label {
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Active states are filled rather than merely tinted, so an enabled mode is
+     unmistakable at a glance. */
+  #transport button.active {
+    color: #ffd21a;
+    border-color: rgba(255, 210, 26, 0.55);
+    background: rgba(255, 210, 26, 0.14);
+  }
+
+  #transport button.active:hover {
+    color: #ffd21a;
+    background: rgba(255, 210, 26, 0.22);
+  }
+
+  /* --- Queue panel ------------------------------------------------------- */
+
+  /* All side panels share geometry; only their contents differ. */
+  #search-panel, #fav-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(340px, 82%);
+    padding: 22px 18px;
+    background: rgba(8, 8, 12, 0.88);
+    backdrop-filter: blur(18px);
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    overflow-y: auto;
+    z-index: 6;
+  }
+
+  #search-panel[hidden], #fav-panel[hidden] { display: none; }
+
+  #search-panel h2 {
+    margin: 0 0 4px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.78 * var(--ui-scale));
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ffd21a;
+  }
+
+  #search-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-size: 15px;
+    line-height: 1;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #search-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+
+  #search-input {
+    width: 100%;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.84);
+    padding: 9px 11px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+
+  #search-input:focus {
+    outline: none;
+    border-color: rgba(255, 210, 26, 0.6);
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  #search-input::-webkit-search-cancel-button { display: none; }
+
+  #search-results { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+
+  #search-results li {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 11px;
+    align-items: center;
+    padding: 7px 6px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+
+  #search-results li:hover { background: rgba(255, 255, 255, 0.08); }
+
+  #search-results img {
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
+    object-fit: cover;
+    display: block;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  #search-results .name {
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.84);
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #search-results .who {
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.68);
+    color: var(--trace-dim);
+  }
+
+  #search-results .time {
+    font-family: var(--mono);
+    font-size: calc(var(--ui-size) * 0.70);
+    color: var(--trace-dim);
+  }
+
+  #fav-panel h2 {
+    margin: 0 0 4px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.78 * var(--ui-scale));
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ffd21a;
+  }
+
+  .panel-note {
+    margin: 0 0 14px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.74);
+    color: var(--trace-dim);
+  }
+
+  #fav-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-size: 15px;
+    line-height: 1;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #fav-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+
+  .search-row { position: relative; margin-bottom: 8px; }
+
+  #fav-search {
+    width: 100%;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.80);
+    padding: 8px 28px 8px 10px;
+    border-radius: 7px;
+  }
+
+  #fav-search::placeholder { color: var(--trace-dim); }
+
+  #fav-search:focus {
+    outline: none;
+    border-color: rgba(255, 210, 26, 0.55);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* The browser's own clear affordance is inconsistent across platforms, so it
+     is hidden in favour of one that always looks the same. */
+  #fav-search::-webkit-search-cancel-button { display: none; }
+
+  #fav-search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--trace-dim);
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 5px;
+    cursor: pointer;
+  }
+
+  #fav-search-clear:hover { color: #ffd21a; }
+  #fav-search-clear[hidden] { display: none; }
+
+  #fav-filter {
+    width: 100%;
+    margin-bottom: 10px;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.76);
+    padding: 7px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  #fav-filter:hover { border-color: rgba(255, 210, 26, 0.45); color: #fff; }
+  #fav-filter option { background: #0a0a0e; color: #fff; }
+
+  #fav-folders { display: grid; gap: 2px; margin-bottom: 12px; }
+
+  .folder {
+    display: grid;
+    grid-template-columns: 12px auto 1fr auto;
+    align-items: center;
+    gap: 8px;
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.78);
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .folder:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+
+  .folder.active {
+    color: #ffd21a;
+    background: rgba(255, 210, 26, 0.10);
+    border-color: rgba(255, 210, 26, 0.35);
+  }
+
+  .folder .caret { color: var(--trace-dim); font-size: 9px; }
+  .folder img { width: 18px; height: 18px; border-radius: 50%; display: block; }
+  .folder .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .folder-count {
+    font-family: var(--mono);
+    font-size: calc(var(--ui-size) * 0.64);
+    color: var(--trace-dim);
+  }
+
+  /* Extra-contributor badge on cover art. */
+  #fav-list .count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: #ffd21a;
+    color: #08080c;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    display: grid;
+    place-content: center;
+    border: 2px solid #0a0a0e;
+  }
+
+  #fav-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+
+  #fav-list li {
+    display: grid;
+    grid-template-columns: 46px 1fr auto;
+    gap: 11px;
+    align-items: center;
+    padding: 7px 6px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+
+  #fav-list li:hover { background: rgba(255, 255, 255, 0.08); }
+
+  #fav-list li.selected {
+    background: rgba(255, 210, 26, 0.14);
+    outline: 1px solid rgba(255, 210, 26, 0.45);
+  }
+
+  #fav-list li:active { cursor: grabbing; }
+
+  /* Highlighted while something is being dragged over it, so the target is
+     unmistakable - a drop zone with no feedback feels broken even when it works. */
+  #queue-panel.drop-target {
+    outline: 2px dashed rgba(255, 210, 26, 0.65);
+    outline-offset: -6px;
+    background: rgba(255, 210, 26, 0.06);
+  }
+
+  /* Cover art with the adder's avatar tucked into the corner: the album says
+     what the track is, the avatar says whose taste it is. */
+  #fav-list .art {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    display: block;
+    flex-shrink: 0;
+  }
+
+  #fav-list .cover {
+    width: 46px;
+    height: 46px;
+    border-radius: 7px;
+    object-fit: cover;
+    display: block;
+  }
+
+  #fav-list .avatar.initial {
+    display: grid;
+    place-content: center;
+    color: #fff;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.62);
+    font-weight: 700;
+  }
+
+  #fav-list .avatar {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid #0a0a0e;
+    object-fit: cover;
+    display: block;
+  }
+
+  #fav-list .text { min-width: 0; display: grid; gap: 2px; }
+  #fav-list .who {
+    color: var(--trace-dim);
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.68);
+  }
+
+  #fav-list .name {
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.86);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+  }
+
+  #fav-list .time {
+    font-family: var(--mono);
+    font-size: calc(var(--ui-size) * 0.70);
+    color: var(--trace-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #fav-list .empty {
+    color: var(--trace-dim);
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.78);
+    cursor: default;
+    display: block;
+  }
+
+  #t-fav.active { color: #ffd21a; }
+
+  #queue-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 80%);
+    padding: 22px 18px;
+    background: rgba(8, 8, 12, 0.86);
+    backdrop-filter: blur(16px);
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    overflow-y: auto;
+    z-index: 6;
+  }
+
+  #queue-panel[hidden] { display: none; }
+
+  #queue-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    /* Larger and clearly a button. A bare glyph in the corner reads as
+       decoration, and people could not find how to dismiss the panel. */
+    width: 30px;
+    height: 30px;
+    font-size: 18px;
+    z-index: 2;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--trace);
+    line-height: 1;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #queue-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+
+  #queue-panel h2 {
+    margin: 0 0 14px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.78 * var(--ui-scale));
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ffd21a;
+  }
+
+  #deck-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+  #deck-tabs .tab {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.06em;
+    padding: 6px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  /* Viewing and playing are shown differently on purpose: browsing another
+     playlist must never look like it changed what the room hears. */
+  #deck-tabs .tab.viewing { border-color: rgba(255, 255, 255, 0.35); color: #fff; }
+  #deck-tabs .tab.playing { color: #ffd21a; border-color: rgba(255, 210, 26, 0.55); }
+
+  .deck-actions { display: flex; gap: 6px; margin-bottom: 12px; }
+
+  .deck-actions button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: transparent;
+    color: var(--trace-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    padding: 5px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .deck-actions button:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.4); }
+  .deck-actions button[hidden] { display: none; }
+
+  #queue-list .by { color: var(--trace-dim); font-size: 9px; }
+
+  /* Positioned so the insertion indicator can be offset against the list
+     rather than the panel, which keeps it correct however far the panel is
+     scrolled. */
+  #queue-list { margin: 0; padding: 0; list-style: none; position: relative; }
+
+  /* A single element moved between rows while a drag is in progress. It is
+     never re-rendered and never affects layout: `pointer-events: none` also
+     keeps it from becoming the dragover target itself, which would make the
+     line flicker as it chased the cursor. */
+  #queue-list .drop-indicator {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: #ffd21a;
+    box-shadow: 0 0 7px rgba(255, 210, 26, 0.85);
+    pointer-events: none;
+  }
+
+  /* Only set for a multiple selection, so a single track shows the line alone. */
+  #queue-list .drop-indicator[data-count]:not([data-count=""])::after {
+    content: attr(data-count);
+    position: absolute;
+    right: 0;
+    top: -8px;
+    padding: 1px 6px;
+    border-radius: 7px;
+    background: #ffd21a;
+    color: #14141a;
+    font-family: var(--ui-font);
+    font-size: 9px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  #queue-list li {
+    display: grid;
+    grid-template-columns: 22px 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 6px;
+    border-radius: 7px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.80);
+    cursor: pointer;
+  }
+
+  #queue-list li:hover { background: rgba(255, 255, 255, 0.07); }
+  #queue-list .num { color: var(--trace-dim); font-variant-numeric: tabular-nums; }
+  #queue-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #queue-list .time { color: var(--trace-dim); font-variant-numeric: tabular-nums; }
+  #queue-list .empty { color: var(--trace-dim); cursor: default; display: block; }
+
+  #queue-list .tools { display: flex; gap: 3px; opacity: 0; transition: opacity 120ms ease; }
+  #queue-list li:hover .tools { opacity: 1; }
+
+  #queue-list .tools button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-size: 10px;
+    line-height: 1;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  #queue-list .tools button:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+
+  /* The remove control is destructive, so it warns on hover rather than
+     matching the neutral reorder arrows. */
+  #queue-list .tools button:last-child:hover {
+    color: #ff6b6b;
+    border-color: rgba(255, 107, 107, 0.55);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .readout { transition: none; }
+  }
+
+  /* Landing page: shown to direct visitors instead of a stalled loading state. */
+  body.landing-mode #stage,
+  body.landing-mode .readout { display: none; }
+
+  /* An explicit `display` beats the user-agent's `[hidden] { display: none }`,
+     so the hidden state has to be restated or the panel never hides. */
+  #landing[hidden] { display: none; }
+
+  #landing {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 4px;
+    padding: 32px;
+    text-align: center;
+    color: var(--trace);
+  }
+
+  #landing .mark {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    border: 3px solid #fff;
+    margin-bottom: 22px;
+    position: relative;
+  }
+
+  /* Play triangle, echoing the app icon without shipping an image. */
+  #landing .mark::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 54%;
+    transform: translate(-50%, -50%);
+    border-left: 20px solid #ffd21a;
+    border-top: 12px solid transparent;
+    border-bottom: 12px solid transparent;
+  }
+
+  #landing h1 {
+    margin: 0;
+    font-size: 15px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ffd21a;
+  }
+
+  #landing .lede {
+    margin: 14px 0 26px;
+    max-width: 40ch;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  #landing ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    display: grid;
+    gap: 10px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-align: left;
+  }
+
+  #landing li { counter-increment: step; }
+
+  #landing li::before {
+    content: counter(step);
+    display: inline-grid;
+    place-content: center;
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    border-radius: 50%;
+    border: 1px solid var(--trace-dim);
+    font-size: 10px;
+  }
+
+  #landing code {
+    color: #ffd21a;
+    font-family: var(--mono);
+  }
+
+  #landing .fine {
+    margin-top: 30px;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--trace-dim);
+  }
+</style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <canvas id="stage-2d"></canvas>
+
+  <!-- Visualisation picker. Each viewer's choice is local to them. -->
+  <div id="visual-picker">
+    <div id="visual-menu" hidden></div>
+    <div id="settings-menu" hidden>
+      <h3>Interface size</h3>
+      <div class="row">
+        <input id="ui-scale" type="range" min="0" max="200" step="5" value="100">
+        <span id="ui-scale-value">1&times;</span>
+      </div>
+      <h3>Text size</h3>
+      <div class="row">
+        <input id="ui-size" type="range" min="0" max="11" step="1" value="3">
+        <span id="ui-size-value">14px</span>
+      </div>
+      <h3>Interface font</h3>
+      <div id="ui-fonts" class="fonts"></div>
+    </div>
+    <div class="picker-row">
+      <button id="visual-button">Silhouettes</button>
+      <button id="settings-button" title="Interface size and font">Aa</button>
+    </div>
+  </div>
+
+  <!-- An invisible strip along the bottom that reveals the transport. The bar
+       itself cannot be the hover target once hidden, so the zone has to outlive
+       it. -->
+  <div id="transport-zone" aria-hidden="true"></div>
+
+  <!-- Transport sits over the visualiser; the server owns all playback state. -->
+  <div id="transport" hidden>
+    <div class="meta">
+      <div id="t-title-window"><span id="t-title"></span></div>
+      <span id="t-artist"></span>
+    </div>
+    <div class="scrubline">
+      <span id="t-elapsed">0:00</span>
+      <div id="t-scrub"><div id="t-fill"></div></div>
+      <span id="t-total">0:00</span>
+    </div>
+    <div class="buttons">
+      <button id="t-prev" title="Previous">&#9198;</button>
+      <button id="t-toggle" class="primary" title="Pause">&#9208;</button>
+      <button id="t-next" title="Next">&#9197;</button>
+      <button id="t-stop" title="Stop and clear">&#9209;</button>
+      <span class="spacer"></span>
+      <button id="t-shuffle" class="chip" title="Shuffle">
+        <span class="glyph">&#128256;</span><span class="label">shuffle</span>
+      </button>
+      <button id="t-loop" class="chip" title="Loop: off">
+        <span class="glyph">&#128257;</span><span id="t-loop-label" class="label">loop off</span>
+      </button>
+      <button id="t-fav" class="chip" title="Favourite this track">
+        <span class="glyph">&#9734;</span>
+      </button>
+      <button id="t-favs" class="chip" title="Open favourites">
+        <span class="label">favs</span>
+      </button>
+      <button id="t-queue" class="chip" title="Queue">
+        <span class="glyph">&#9776;</span><span id="t-queue-label" class="label">0</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Search lives on the right, opposite the visualisation picker, so the two
+       clusters bracket the frame rather than crowding one corner. -->
+  <div id="search-launcher">
+    <button id="t-search" title="Search for a track">Search</button>
+  </div>
+
+  <aside id="search-panel" hidden>
+    <button id="search-close" title="Close (Esc)" aria-label="Close">&times;</button>
+    <h2>Add a track</h2>
+    <p class="panel-note">Type a song or paste a link, then press Enter.</p>
+    <input id="search-input" type="search" placeholder="Song, artist, or link"
+           autocomplete="off" spellcheck="false">
+    <p id="search-status" class="panel-note"></p>
+    <ol id="search-results"></ol>
+  </aside>
+
+  <aside id="fav-panel" hidden>
+    <button id="fav-close" title="Close (Esc)" aria-label="Close">&times;</button>
+    <h2>Favourites</h2>
+    <p class="panel-note">Shared with everyone in this server. Click to play.</p>
+    <div class="search-row">
+      <input id="fav-search" type="search" placeholder="Search favourites"
+             autocomplete="off" spellcheck="false">
+      <button id="fav-search-clear" title="Clear search" hidden>&times;</button>
+    </div>
+    <select id="fav-filter" title="Sort favourites">
+      <option value="latest">Latest favourited</option>
+      <option value="oldest">Oldest first</option>
+      <option value="popular">Most favourited</option>
+      <option value="az">A to Z</option>
+      <option value="za">Z to A</option>
+      <option value="longest">Longest first</option>
+    </select>
+    <div id="fav-folders"></div>
+    <ol id="fav-list"></ol>
+  </aside>
+
+  <aside id="queue-panel" hidden>
+    <button id="queue-close" title="Close (Esc)" aria-label="Close">&times;</button>
+    <h2>Playlists</h2>
+    <div id="deck-tabs"></div>
+    <div class="deck-actions">
+      <button id="deck-shuffle">shuffle</button>
+      <button id="deck-play" hidden>play this next</button>
+    </div>
+    <ol id="queue-list"></ol>
+  </aside>
+
+  <p id="status">Starting up</p>
+  <p id="notice" hidden></p>
+
+  <!-- Shown only when the page is opened directly rather than inside Discord.
+       This endpoint is not a website; it exists for Discord to fetch. -->
+  <section id="landing" hidden>
+    <div class="mark" aria-hidden="true"></div>
+    <h1>KAM Media Player</h1>
+    <p class="lede">
+      This address is the Activity endpoint, not a website. The visualiser runs
+      inside Discord.
+    </p>
+    <ol>
+      <li>Join a voice channel</li>
+      <li>Run <code>/play</code> with a track</li>
+      <li>Open the Activity from the voice panel</li>
+    </ol>
+    <p class="fine">Server is running and reachable.</p>
+  </section>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

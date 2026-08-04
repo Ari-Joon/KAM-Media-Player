@@ -1,0 +1,15 @@
+# Automatic HTTPS via Let's Encrypt. Requires DOMAIN's A record to point at
+# this server's public IP before first start, or the certificate request fails.
+{$DOMAIN} {
+	reverse_proxy app:3000
+
+	encode gzip
+
+	# The Activity runs inside Discord's iframe, so framing must be permitted.
+	# A default-deny X-Frame-Options here would break the whole product.
+	header {
+		-X-Frame-Options
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Content-Type-Options nosniff
+	}
+}

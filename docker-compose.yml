@@ -1,0 +1,44 @@
+# Production stack for a plain VPS: the app plus Caddy for automatic HTTPS.
+#
+# Discord will only load an Activity over valid HTTPS, and Caddy obtains and
+# renews a Let's Encrypt certificate on its own, which is why it is here rather
+# than exposing Node directly.
+#
+# Usage:
+#   cp .env.example .env   # fill in, and add DOMAIN=kam.yourdomain.com
+#   docker compose up -d --build
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Must be present at build time, not just runtime - see Dockerfile.
+        VITE_DISCORD_CLIENT_ID: ${VITE_DISCORD_CLIENT_ID}
+    restart: unless-stopped
+    env_file: .env
+    # Score cache persists across restarts and redeploys, so the same track does
+    # not need to be analysed again after every container restart.
+    volumes:
+      - ./cache:/data/cache
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

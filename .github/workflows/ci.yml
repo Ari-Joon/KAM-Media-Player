@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  activity:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: activity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: activity/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

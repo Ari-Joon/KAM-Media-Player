@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAM visualisation harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    background: #07070b; color: #e7e7ee;
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #stage { position: relative; flex: 1; min-height: 0; background: #000; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #stage canvas[hidden] { display: none; }
+
+  #bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 10px 12px; background: #101018; border-top: 1px solid #24243a;
+  }
+  label { display: flex; gap: 6px; align-items: center; color: #a6a6bd; white-space: nowrap; }
+  select, button, input[type=file] {
+    background: #1b1b28; color: #e7e7ee; border: 1px solid #33334d;
+    border-radius: 6px; padding: 5px 9px; font: inherit;
+  }
+  button { cursor: pointer; min-width: 74px; }
+  button:hover { background: #26263a; }
+  button.on { background: #3b3b6b; border-color: #5b5b9b; }
+  #seek { flex: 1 1 260px; min-width: 180px; accent-color: #7b7bd6; }
+  #readout {
+    font-variant-numeric: tabular-nums; color: #9a9ab5; min-width: 190px;
+  }
+  #err {
+    display: none; padding: 8px 12px; background: #4a1420; color: #ffd7de;
+    border-top: 1px solid #7a2438; white-space: pre-wrap; font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="canvas2d"></canvas>
+    <canvas id="shader" hidden></canvas>
+  </div>
+
+  <div id="err"></div>
+
+  <div id="bar">
+    <label>Visual <select id="visual"></select></label>
+    <label>Score <select id="score"></select></label>
+    <button id="play">Play</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <span id="readout">0:00 / 0:00</span>
+    <label>Audio <input id="audio" type="file" accept="audio/*"></label>
+    <label>Artwork <input id="art" type="file" accept="image/*"></label>
+    <label>Cast <select id="cast">
+      <option value="">auto</option>
+      <option>1</option><option>2</option><option>3</option><option>4</option>
+      <option>5</option><option>6</option><option>7</option><option>8</option>
+    </select></label>
+  </div>
+
+  <script type="module" src="./preview.js"></script>
+</body>
+</html>
