@@ -82,10 +82,22 @@ hostname every time it starts — and because Discord has no API for URL mapping
 that means editing the Developer Portal by hand every session. Two ways out, both
 free, neither needing the machine to be anything other than your own computer.
 
-### ngrok, with a free static domain
+### ngrok, with a static domain — paid plans only
 
-The lowest-friction option: the free tier includes one static domain, with no
-card and nothing to buy.
+> **The free tier cannot host a Discord Activity.** ngrok's edge serves a
+> "You are about to visit…" interstitial to any request with a browser
+> User-Agent, and Discord loads an Activity in an embedded browser — so the
+> Activity gets the warning page instead of your app and shows a white screen.
+> Measured against the same URL at the same moment: `curl` received the app
+> (38,103 bytes), the same request with a Chrome User-Agent received the
+> interstitial (2,923 bytes).
+>
+> The only documented bypass is sending an `ngrok-skip-browser-warning` request
+> header, and nothing can add a header to the top-level document request —
+> Discord makes it. Removing the interstitial is a paid feature. Note that
+> `curl` alone will not reveal this, because its User-Agent is not a browser.
+
+On a paid plan the interstitial is gone and this is the lowest-friction option.
 
 1. Create an account at <https://dashboard.ngrok.com> and install the agent:
 

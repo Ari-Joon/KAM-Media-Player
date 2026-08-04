@@ -447,19 +447,6 @@ export async function describeLink(url) {
   throw new Error('That link could not be identified.');
 }
 
-export async function describeSpotify(url) {
-  const response = await fetch(
-    `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`,
-    { headers: { Accept: 'application/json' } },
-  );
-  if (!response.ok) throw new Error(`Spotify returned ${response.status} for that link.`);
-
-  const info = await response.json();
-  const title = String(info.title ?? '').trim();
-  if (!title) throw new Error('That Spotify link did not name a track.');
-  return title;
-}
-
 export async function searchSoundCloud(query, limit = 5) {
   if (soundcloudApi.available) {
     try {
