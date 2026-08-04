@@ -471,7 +471,18 @@ async function main() {
           failed.add(entry.id);
           console.error(`${entry.name} failed and was disabled:`, error);
         }
-        const replacement = available.find((candidate) => !failed.has(candidate.id));
+        // Never fall back to "None".
+        //
+        // `available` is in menu order and "None" is first, so the first entry
+        // that had not failed was always the one that draws nothing - a crash
+        // in any visualisation dropped the viewer onto a blank stage that looks
+        // exactly like a second, worse bug. The default is tried first, then any
+        // working visualisation, and "None" only ever by choosing it.
+        const replacement = available.find(
+          (candidate) => candidate.id === DEFAULT_VISUAL && !failed.has(candidate.id),
+        ) ?? available.find(
+          (candidate) => candidate.id !== 'none' && !failed.has(candidate.id),
+        );
         if (replacement && replacement.id !== currentId) selectVisual(replacement.id);
       }
     },
