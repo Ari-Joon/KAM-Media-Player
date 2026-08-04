@@ -1,0 +1,28 @@
+# Normalise line endings.
+#
+# This repository is written on Windows, so every text file is CRLF on disk.
+# Without this, a contributor on macOS or Linux sees every file as entirely
+# rewritten the moment they touch one - which buries a real change in a diff of
+# thirty thousand lines and makes review impossible.
+#
+# `text=auto` stores LF in the repository and checks out whatever the platform
+# uses, so both sides keep working and neither sees phantom changes.
+* text=auto
+
+# Shell scripts must stay LF even on Windows: CRLF breaks the shebang line.
+*.sh text eol=lf
+
+# Binary, so Git never tries to translate anything inside them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.m4a binary
+*.mp3 binary
+*.ogg binary
+*.opus binary
+*.wav binary
+*.webm binary
