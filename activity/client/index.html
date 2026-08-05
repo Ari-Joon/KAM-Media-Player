@@ -195,6 +195,27 @@
 
   #t-search:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.45); }
 
+  /* Sits beside Search, sharing its look: the two are peers, both of them ways
+     into a list of tracks. */
+  #search-launcher { display: flex; gap: 8px; }
+
+  #t-playlists {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 8, 12, 0.72);
+    backdrop-filter: blur(12px);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #t-playlists:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.45); }
+
   #settings-button {
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -488,7 +509,7 @@
     #fav-list li, #search-results li { padding: 11px 6px; }
     /* Side panels take the full width: 340px on a phone leaves the list
        unreadably narrow. */
-    #queue-panel, #fav-panel, #search-panel { width: min(340px, 100%); }
+    #queue-panel, #fav-panel, #search-panel, #playlist-panel { width: min(340px, 100%); }
   }
 
   #transport button {
@@ -555,8 +576,219 @@
 
   /* --- Queue panel ------------------------------------------------------- */
 
+  /* --- Playlists --------------------------------------------------------- */
+
+  #playlist-panel .playlist {
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+    padding: 10px 11px;
+    margin-bottom: 10px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  /* Private and public are told apart by colour, by a border, by a lock, and by
+     a word - not by any one of those. Which playlist is which is the single
+     thing a user must never get wrong here, and a lock glyph alone fails anyone
+     who cannot see it, while colour alone fails the same people again. */
+  #playlist-panel .playlist.is-private {
+    border-color: rgba(255, 210, 26, 0.38);
+    background: rgba(255, 210, 26, 0.06);
+  }
+
+  #playlist-panel .playlist.is-public {
+    border-color: rgba(120, 200, 255, 0.34);
+    background: rgba(120, 200, 255, 0.05);
+  }
+
+  #playlist-panel .playlist-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  #playlist-panel .badge {
+    flex: none;
+    font-family: var(--ui-font);
+    font-size: calc(8.5px * var(--ui-scale));
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+
+  #playlist-panel .is-private .badge {
+    color: #1a1608;
+    background: #ffd21a;
+  }
+
+  #playlist-panel .is-public .badge {
+    color: #06131c;
+    background: rgb(120, 200, 255);
+  }
+
+  #playlist-panel .playlist-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #fff;
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    text-overflow: ellipsis;
+  }
+
+  /* A name is editable, so it has to look editable on approach - an input that
+     is invisible until focus reads as plain text nobody thinks to click. */
+  #playlist-panel .playlist-name:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  #playlist-panel .playlist-name:focus {
+    outline: none;
+    border-color: rgba(255, 210, 26, 0.6);
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  #playlist-panel .playlist-name[readonly] {
+    border-color: transparent;
+    background: transparent;
+    color: var(--trace);
+  }
+
+  #playlist-panel .count {
+    flex: none;
+    font-family: var(--ui-font);
+    font-size: calc(9px * var(--ui-scale));
+    color: var(--trace);
+  }
+
+  #playlist-panel .owner {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 7px;
+  }
+
+  #playlist-panel .owner img {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: block;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  #playlist-panel .owner span {
+    font-size: 12px;
+    color: var(--trace);
+  }
+
+  #playlist-panel ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  #playlist-panel li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 6px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  #playlist-panel li:hover { background: rgba(255, 255, 255, 0.08); }
+
+  #playlist-panel li .title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #playlist-panel li .drop {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--trace);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 4px;
+  }
+
+  #playlist-panel li .drop:hover { color: #ff6b6b; }
+
+  #playlist-panel .empty {
+    font-size: 12px;
+    color: var(--trace);
+    padding: 4px 6px;
+  }
+
+  .playlist-heading {
+    margin: 16px 0 8px;
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.68 * var(--ui-scale));
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--trace);
+  }
+
+  /* --- Track context menu ------------------------------------------------ */
+
+  #track-menu {
+    position: fixed;
+    z-index: 20;
+    min-width: 190px;
+    padding: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 9px;
+    background: rgba(14, 14, 18, 0.97);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  }
+
+  #track-menu[hidden] { display: none; }
+
+  #track-menu .head {
+    padding: 5px 9px 7px;
+    font-size: 11px;
+    color: var(--trace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 4px;
+  }
+
+  #track-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: #fff;
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #track-menu button:hover { background: rgba(255, 210, 26, 0.16); color: #ffd21a; }
+  #track-menu button:disabled { color: var(--trace); cursor: default; }
+  #track-menu button:disabled:hover { background: transparent; color: var(--trace); }
+
   /* All side panels share geometry; only their contents differ. */
-  #search-panel, #fav-panel {
+  #search-panel, #fav-panel, #playlist-panel {
     position: fixed;
     top: 0;
     right: 0;
@@ -570,9 +802,9 @@
     z-index: 6;
   }
 
-  #search-panel[hidden], #fav-panel[hidden] { display: none; }
+  #search-panel[hidden], #fav-panel[hidden], #playlist-panel[hidden] { display: none; }
 
-  #search-panel h2 {
+  #search-panel h2, #playlist-panel h2 {
     margin: 0 0 4px;
     font-family: var(--ui-font);
     font-size: calc(var(--ui-size) * 0.78 * var(--ui-scale));
@@ -1294,6 +1526,7 @@
        clusters bracket the frame rather than crowding one corner. -->
   <div id="search-launcher">
     <button id="t-search" title="Search for a track">Search</button>
+    <button id="t-playlists" title="Your playlists, and public ones from this server">Playlists</button>
   </div>
 
   <aside id="search-panel" hidden>
@@ -1327,9 +1560,25 @@
     <ol id="fav-list"></ol>
   </aside>
 
+  <!-- Playlists: a person's own saved collections, which is a different thing
+       from the queue next door. The queue is what the room is about to hear and
+       empties as it plays; these persist. -->
+  <aside id="playlist-panel" hidden>
+    <button id="playlist-close" title="Close (Esc)" aria-label="Close">&times;</button>
+    <h2>Playlists</h2>
+    <p class="panel-note">
+      Right-click any track to save it here. Your public playlist is visible to
+      everyone in this server.
+    </p>
+    <div id="playlist-mine"></div>
+    <h3 class="playlist-heading">Shared in this server</h3>
+    <div id="playlist-others"></div>
+    <p id="playlist-status" class="panel-note"></p>
+  </aside>
+
   <aside id="queue-panel" hidden>
     <button id="queue-close" title="Close (Esc)" aria-label="Close">&times;</button>
-    <h2>Playlists</h2>
+    <h2>Queue</h2>
     <div id="deck-tabs"></div>
     <div class="deck-actions">
       <button id="deck-shuffle">shuffle</button>
@@ -1337,6 +1586,11 @@
     </div>
     <ol id="queue-list"></ol>
   </aside>
+
+  <!-- One menu, moved and refilled per track, rather than one per row. A list
+       of two hundred favourites would otherwise carry two hundred hidden
+       menus. -->
+  <div id="track-menu" hidden role="menu"></div>
 
   <p id="status">Starting up</p>
   <p id="notice" hidden></p>

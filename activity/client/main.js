@@ -70,7 +70,8 @@ const FONT_SIZES = [
  * never collide.
  */
 function closeAllOverlays() {
-  for (const id of ['visual-menu', 'settings-menu', 'queue-panel', 'fav-panel']) {
+  for (const id of ['visual-menu', 'settings-menu', 'queue-panel', 'fav-panel',
+    'playlist-panel', 'track-menu']) {
     const element = document.getElementById(id);
     if (element) element.hidden = true;
   }
@@ -583,6 +584,11 @@ async function main() {
     const transport = new Transport(
       discordSdk.channelId, discordSdk.guildId, viewer, undefined, accessToken,
     );
+    // Held long enough to read and no longer. The poll loop clears the notice
+    // whenever the analysing state changes, so a message with no hold of its
+    // own can be wiped within 600ms - which is how an earlier diagnostic
+    // vanished before anyone saw it.
+    transport.notify = (message) => setNotice(message, 4000);
     for (const instance of instances.values()) instance.setTrack?.(initial.track);
     transport.update(initial);
     document.getElementById('transport').hidden = false;

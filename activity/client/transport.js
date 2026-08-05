@@ -12,6 +12,8 @@
  * value, and the server is told once on release.
  */
 
+import { PlaylistPanel, TrackMenu } from './playlists.js';
+
 /**
  * Route an external image through this origin.
  *
@@ -23,6 +25,23 @@
  */
 function proxied(url) {
   return url ? `/api/image?url=${encodeURIComponent(url)}` : null;
+}
+
+/**
+ * What a row hands to the right-click menu.
+ *
+ * Identity and a title, nothing else. The menu never needs a descriptor - every
+ * action it offers goes back to the server, which holds the real one - and
+ * putting a full track in an attribute would mean the DOM carrying a copy of
+ * every list on the page.
+ *
+ * @param {object} track
+ * @returns {string}
+ */
+function menuTrack(track) {
+  return JSON.stringify({
+    provider: track.provider, providerId: track.providerId, title: track.title,
+  });
 }
 
 /**
@@ -201,6 +220,7 @@ export class Transport {
       favSearch: document.getElementById('fav-search'),
       favSearchClear: document.getElementById('fav-search-clear'),
       favFolders: document.getElementById('fav-folders'),
+      playlistsButton: document.getElementById('t-playlists'),
       tabs: document.getElementById('deck-tabs'),
       deckShuffle: document.getElementById('deck-shuffle'),
       deckPlay: document.getElementById('deck-play'),
@@ -223,6 +243,45 @@ export class Transport {
         + 'index.html is older than the JavaScript.',
       );
     }
+
+    /**
+     * Set by the page so panels can surface a message in the shared notice
+     * line. Late-bound rather than a constructor argument: the notice belongs
+     * to the page, and the transport is built before the page has finished
+     * deciding what to do with one.
+     *
+     * @type {((message: string) => void)|null}
+     */
+    this.notify = null;
+    const notify = (message) => this.notify?.(message);
+
+    this.playlists = new PlaylistPanel({
+      guildId: this.guildId,
+      authHeaders: () => this.authHeaders(),
+      enqueue: (track) => this.addToQueue(track).catch((error) => notify(error.message)),
+      notify,
+    });
+
+    this.trackMenu = new TrackMenu({
+      enqueue: async (track) => {
+        try {
+          await this.addToQueue(track);
+          notify(`Added ${track.title} to the queue.`);
+        } catch (error) {
+          notify(error.message);
+        }
+      },
+      playNext: async (track) => {
+        try {
+          await this.playNext(track);
+          notify(`${track.title} plays next.`);
+        } catch (error) {
+          notify(error.message);
+        }
+      },
+      playlists: this.playlists,
+      notify,
+    });
 
     this.bind();
   }
@@ -323,6 +382,19 @@ export class Transport {
     this.elements.favClose.addEventListener('click', () => {
       this.elements.favPanel.hidden = true;
     });
+
+    this.elements.playlistsButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (this.playlists.panel.hidden) {
+        this.closePanels();
+        this.playlists.open();
+      } else {
+        this.playlists.close();
+      }
+    });
+    // Clicks inside must not reach the document handler that closes panels -
+    // renaming a playlist means clicking into a field inside this panel.
+    this.playlists.panel.addEventListener('click', (event) => event.stopPropagation());
 
     // Queue panel as a drop target for favourites.
     //
@@ -860,6 +932,7 @@ export class Transport {
     this.elements.panel.hidden = true;
     this.elements.favPanel.hidden = true;
     this.elements.searchPanel.hidden = true;
+    this.playlists.close();
     this.elements.queueButton.classList.remove('active');
   }
 
@@ -920,39 +993,64 @@ export class Transport {
 
       item.append(text, time);
       item.title = `Queue ${track.title}`;
+      item.dataset.menuTrack = menuTrack(track);
       item.addEventListener('click', () => this.queueTrack(track));
       this.elements.searchResults.append(item);
     }
   }
 
   /**
-   * Add a searched track to the queue.
+   * Put a track in the queue.
+   *
+   * @param {object} track Identity is enough; a descriptor is ignored.
+   * @param {number} [at] Absolute position. Appends when absent.
+   * @returns {Promise<void>}
+   */
+  async addToQueue(track, at) {
+    const response = await fetch(`/api/queue/${this.channelId}`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      // Identity only. The server holds the descriptor it gave us and will
+      // not accept one from here - see `resolveKnownTrack` in server.js.
+      body: JSON.stringify({
+        track: { provider: track.provider, providerId: track.providerId },
+        ...(Number.isFinite(at) ? { at, deck: this.viewIndex } : {}),
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error ?? 'Could not queue that track.');
+    }
+    const state = await response.json();
+    this.update(state);
+    this.onState?.(state);
+    this.queueSignature = null;
+  }
+
+  /**
+   * Queue a track so it plays after the current one.
+   *
+   * Position 1, not 0: 0 is the track playing right now, and inserting there
+   * would push the current track back in the list while it is still sounding.
+   *
+   * @param {object} track
+   */
+  async playNext(track) {
+    await this.addToQueue(track, 1);
+  }
+
+  /**
+   * Add a searched track to the queue, reporting into the search panel.
    *
    * @param {object} track
    */
   async queueTrack(track) {
     this.elements.searchStatus.textContent = `Queueing ${track.title}\u2026`;
     try {
-      const response = await fetch(`/api/queue/${this.channelId}`, {
-        method: 'POST',
-        headers: this.authHeaders(),
-        // Identity only. The server holds the descriptor it gave us and will
-        // not accept one from here - see `resolveKnownTrack` in server.js.
-        body: JSON.stringify({
-          track: { provider: track.provider, providerId: track.providerId },
-        }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.error ?? 'Could not queue that track.');
-      }
-      const state = await response.json();
-      this.update(state);
-      this.onState?.(state);
+      await this.addToQueue(track);
       this.elements.searchStatus.textContent = `Added ${track.title}.`;
       this.elements.searchInput.value = '';
       this.elements.searchResults.textContent = '';
-      this.queueSignature = null;
     } catch (error) {
       this.elements.searchStatus.textContent = error.message;
     }
@@ -1101,6 +1199,7 @@ export class Transport {
 
       item.append(text, time);
       item.title = `Play ${entry.title}`;
+      item.dataset.menuTrack = menuTrack(entry);
       // Selection is keyed on the track's identity rather than the row element
       // or its position: the list is filtered and sorted client-side, so an
       // index means nothing between renders, and a key survives someone else
@@ -1513,6 +1612,7 @@ export class Transport {
 
       item.append(number, name, time, tools);
       item.title = `Play ${track.title}`;
+      item.dataset.menuTrack = menuTrack(track);
       // Absolute position from the server, not the display index, so it stays
       // correct while the queue changes underneath.
       item.addEventListener('click', () => this.send('jumpDeck', {

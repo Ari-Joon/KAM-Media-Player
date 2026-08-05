@@ -31,6 +31,7 @@ import {
 import { getPlayer, findPlayerByChannel, stopAll, logVoiceDependencies } from './server/player.js';
 import { fetchClip, discard, uploadLimit, isEmbeddable, probe } from './server/embeds.js';
 import { Favourites, avatarUrl } from './server/favourites.js';
+import { Playlists, SLOTS } from './server/playlists.js';
 import { AnalyserWorker } from './server/analyser.js';
 import { TokenVerifier, AuthError, bearerToken } from './server/auth.js';
 import { ArtistInfo } from './server/artistinfo.js';
@@ -230,6 +231,9 @@ const TRANSCRIBE_LYRICS = process.env.TRANSCRIBE_LYRICS !== '0';
 
 const favourites = new Favourites(CACHE_DIR);
 await favourites.load();
+
+const playlists = new Playlists(CACHE_DIR);
+await playlists.load();
 
 /** Group-size lookups, cached to disk and rate limited. */
 const artistInfo = new ArtistInfo(CACHE_DIR);
@@ -1325,6 +1329,97 @@ app.post('/api/favourites/:guildId', rateLimit(60, 60_000), async (request, resp
 });
 
 /**
+ * What the asking user may see of a guild's playlists.
+ *
+ * Authenticated rather than open, and not because the contents are secret -
+ * the public ones are not. It is because the response is *shaped by who is
+ * asking*: it contains the caller's own private playlist. An unauthenticated
+ * version of this route could not know whose private slot to include, and any
+ * scheme where the client says who it is hands every private playlist to
+ * anyone who can guess a user ID.
+ */
+app.get('/api/playlists/:guildId', async (request, response) => {
+  const { guildId } = request.params;
+  try {
+    const viewer = await authorise(request, { guildId });
+    const view = playlists.forViewer(guildId, viewer);
+
+    const others = await Promise.all(view.others.map(async (entry) => ({
+      ...entry,
+      user: {
+        ...entry.user,
+        avatarUrl: (await resolveAvatar(entry.user.id)) ?? avatarUrl(entry.user),
+      },
+    })));
+
+    response.json({ ...view, others });
+  } catch (error) {
+    sendAuthError(response, error, 'playlist read failed');
+  }
+});
+
+/**
+ * Add to, remove from, or rename one of the caller's own playlists.
+ *
+ * One endpoint with an action, matching `/api/control`. Every action operates
+ * on the *caller's* playlists and no one else's: the user ID comes from the
+ * verified token and is never read from the body, so there is no request shape
+ * that edits another person's collection.
+ */
+app.post('/api/playlists/:guildId', rateLimit(60, 60_000), async (request, response) => {
+  const { guildId } = request.params;
+  const { action, slot, track, name } = request.body ?? {};
+
+  if (!SLOTS.includes(slot)) {
+    return response.status(400).json({ error: 'No such playlist.' });
+  }
+
+  let user;
+  try {
+    user = await authorise(request, { guildId });
+  } catch (error) {
+    return sendAuthError(response, error, 'playlist auth failed');
+  }
+
+  try {
+    if (action === 'rename') {
+      const { name: applied } = playlists.rename(guildId, user, slot, name);
+      return response.json({ renamed: true, name: applied });
+    }
+
+    if (action === 'remove') {
+      if (!track?.provider || !track?.providerId) {
+        return response.status(400).json({ error: 'No track given.' });
+      }
+      const { removed } = playlists.remove(
+        guildId, user.id, slot, track.provider, track.providerId,
+      );
+      return response.json({ removed });
+    }
+
+    if (action === 'add') {
+      // Identity in, descriptor out - the same rule the queue follows. What the
+      // caller sent only *names* a track; the descriptor stored is the one the
+      // server already resolved, so a playlist cannot become a way to smuggle a
+      // url into the queue by way of `resolveKnownTrack`.
+      const subject = resolveKnownTrack(guildId, track);
+      if (!subject) {
+        return response.status(400).json({
+          error: 'That track is no longer available. Search for it again.',
+        });
+      }
+      const { added, reason } = playlists.add(guildId, user, slot, subject);
+      return response.json({ added, reason: reason ?? null });
+    }
+
+    return response.status(400).json({ error: 'Unknown action.' });
+  } catch (error) {
+    console.error('playlist write failed:', error.message);
+    response.status(500).json({ error: 'Something went wrong.' });
+  }
+});
+
+/**
  * Search for tracks from inside the Activity.
  *
  * Mirrors what `/play` does in chat, including the fallback chain for links:
@@ -1479,7 +1574,14 @@ function resolveKnownTrack(guildId, wanted) {
     const { addedBy, addedAt, ...track } = favourite;
     return track;
   }
-  return null;
+
+  // Playlists are full descriptors too, and they are the longest-lived
+  // collection in the product - a track saved months ago has long since fallen
+  // out of `resolvedTracks` and may never have been a favourite. Without this,
+  // a playlist would visibly hold tracks that could not be played, and the
+  // private slot would be the one that broke, because nobody else's favourite
+  // would happen to cover it.
+  return playlists.findTrack(guildId, wanted.provider, wanted.providerId);
 }
 
 app.post('/api/queue/:channelId', rateLimit(30, 60_000), async (request, response) => {

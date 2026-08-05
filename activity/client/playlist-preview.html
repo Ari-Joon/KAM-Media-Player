@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <title>KAM playlists preview</title>
+  <!--
+    Development only, and not an entry point in the production build.
+
+    The playlists panel cannot be opened outside Discord - `main.js` builds a
+    `DiscordSDK` at module scope and authenticates before anything is drawn - so
+    this page mounts the panel and the context menu against a stubbed server.
+    It exists to look at spacing, colour and the private/public marking without
+    a bot, a tunnel and a voice channel.
+  -->
+</head>
+<body>
+  <div id="host"></div>
+  <script type="module">
+    // Pull the real stylesheet out of the real page, so what is seen here is
+    // what ships rather than a copy that drifts.
+    const markup = await (await fetch('/index.html')).text();
+    const parsed = new DOMParser().parseFromString(markup, 'text/html');
+    for (const style of parsed.querySelectorAll('style')) document.head.append(style);
+
+    for (const id of ['playlist-panel', 'track-menu']) {
+      document.getElementById('host').append(parsed.getElementById(id).cloneNode(true));
+    }
+    document.body.style.background = '#0a0a0f';
+    document.body.style.color = '#fff';
+
+    const view = {
+      mine: {
+        public: {
+          slot: 'public', visibility: 'public', name: 'Friday night',
+          tracks: [
+            { provider: 'youtube', providerId: '1', title: 'Memories', artist: 'David Guetta' },
+            { provider: 'youtube', providerId: '2', title: 'One More Time', artist: 'Daft Punk' },
+          ],
+        },
+        private: {
+          slot: 'private', visibility: 'private', name: 'Guilty pleasures',
+          tracks: [{ provider: 'youtube', providerId: '3', title: 'Africa', artist: 'Toto' }],
+        },
+      },
+      others: [
+        {
+          user: { id: '2', username: 'grace', avatarUrl: null },
+          name: 'Deep cuts', visibility: 'public',
+          tracks: [{ provider: 'youtube', providerId: '4', title: 'Windowlicker', artist: 'Aphex Twin' }],
+        },
+        {
+          user: { id: '3', username: 'ada', avatarUrl: null },
+          name: 'Morning', visibility: 'public',
+          tracks: [{ provider: 'youtube', providerId: '5', title: 'Teardrop', artist: 'Massive Attack' }],
+        },
+      ],
+    };
+
+    window.fetch = async (url, options = {}) => ({
+      ok: true,
+      json: async () => ((options.method ?? 'GET') === 'GET' ? view : { renamed: true, name: 'Renamed' }),
+    });
+
+    const { PlaylistPanel, TrackMenu } = await import('./playlists.js');
+    const panel = new PlaylistPanel({
+      guildId: 'g', authHeaders: () => ({}),
+      enqueue: async (track) => console.log('queue', track.title),
+      notify: (message) => console.log('notice:', message),
+    });
+    new TrackMenu({
+      enqueue: async (t) => console.log('queue', t.title),
+      playNext: async (t) => console.log('next', t.title),
+      playlists: panel,
+      notify: (message) => console.log('notice:', message),
+    });
+    await panel.open();
+    window.__panel = panel;
+  </script>
+</body>
+</html>
