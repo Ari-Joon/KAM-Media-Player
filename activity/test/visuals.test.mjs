@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {
-  BarsVisual, ScopeVisual, SpikesVisual, TunnelVisual, ColoursVisual,
+  BarsVisual, ScopeVisual, TunnelVisual, ColoursVisual,
   ParticlesVisual, KaleidoscopeVisual, VinylVisual, NoneVisual,
 } from '../client/visuals.js';
 import {
   GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual,
-  SkylineVisual, ShoalVisual, MosaicVisual, AuroraVisual, PulseVisual,
+  MosaicVisual, AuroraVisual, PulseVisual,
 } from '../client/visuals2.js';
 import { PainterVisual } from '../client/painter.js';
 import { StickMenVisual } from '../client/stickmen.js';
@@ -13,10 +13,10 @@ import { StickMenVisual } from '../client/stickmen.js';
 // Every 2D visualisation in the menu. The WebGL one is excluded: it needs a real
 // GL context, and `main.js` already drops it when one is unavailable.
 const VISUALS = {
-  BarsVisual, ScopeVisual, SpikesVisual, TunnelVisual, ColoursVisual,
+  BarsVisual, ScopeVisual, TunnelVisual, ColoursVisual,
   ParticlesVisual, KaleidoscopeVisual, VinylVisual, NoneVisual,
   GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual,
-  SkylineVisual, ShoalVisual, MosaicVisual, AuroraVisual, PulseVisual,
+  MosaicVisual, AuroraVisual, PulseVisual,
   PainterVisual,
   // Added after two wall-clock reads were found in it: the camera drift and the
   // whole environment layer ran on performance.now(), so the scene kept moving

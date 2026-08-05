@@ -13,12 +13,11 @@ import { ShaderVisualizer } from './visualizer.js';
 import { StickMenVisual } from './stickmen.js';
 import { PainterVisual } from './painter.js';
 import {
-  BarsVisual, ScopeVisual, SpikesVisual, TunnelVisual, ColoursVisual,
+  BarsVisual, ScopeVisual, TunnelVisual, ColoursVisual,
   ParticlesVisual, KaleidoscopeVisual, VinylVisual, NoneVisual,
 } from './visuals.js';
 import {
-  GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual,
-  SkylineVisual, ShoalVisual, MosaicVisual, AuroraVisual,
+  GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual, MosaicVisual, AuroraVisual,
   PulseVisual,
 } from './visuals2.js';
 
@@ -35,7 +34,6 @@ export const VISUALS = [
   { id: 'ambience', name: 'Lava Lamp', mode: 'webgl', make: (c) => new ShaderVisualizer(c) },
   { id: 'bars', name: 'Bars & Waves', mode: '2d', make: (c) => new BarsVisual(c) },
   { id: 'scope', name: 'Scope', mode: '2d', make: (c) => new ScopeVisual(c) },
-  { id: 'spikes', name: 'Spikes', mode: '2d', make: (c) => new SpikesVisual(c) },
   { id: 'tunnel', name: 'Tunnel', mode: '2d', make: (c) => new TunnelVisual(c) },
   { id: 'colours', name: 'Musical Colours', mode: '2d', make: (c) => new ColoursVisual(c) },
   { id: 'alchemy', name: 'Alchemy', mode: '2d', make: (c) => new ParticlesVisual(c) },
@@ -46,8 +44,6 @@ export const VISUALS = [
   { id: 'rain', name: 'Rain', mode: '2d', make: (c) => new RainVisual(c) },
   { id: 'fireflies', name: 'Fireflies', mode: '2d', make: (c) => new FirefliesVisual(c) },
   { id: 'ribbons', name: 'Ribbons', mode: '2d', make: (c) => new RibbonsVisual(c) },
-  { id: 'skyline', name: 'Skyline', mode: '2d', make: (c) => new SkylineVisual(c) },
-  { id: 'shoal', name: 'Shoal', mode: '2d', make: (c) => new ShoalVisual(c) },
   { id: 'mosaic', name: 'Mosaic', mode: '2d', make: (c) => new MosaicVisual(c) },
   { id: 'aurora', name: 'Aurora', mode: '2d', make: (c) => new AuroraVisual(c) },
   { id: 'pulse', name: 'Pulse', mode: '2d', make: (c) => new PulseVisual(c) },

@@ -852,6 +852,13 @@
     /* Above the favourites panel, so the pointer reaches it rather than
        dragging over the panel it started from. */
     z-index: 7;
+    /* Opaque while dragging.
+       The panels are normally translucent so the visualisation reads through
+       them, which is right for something you are reading. It is wrong for
+       something you are aiming at: mid-drag the queue looked half-dissolved and
+       read as a rendering fault rather than as a target. */
+    background: #0b0b10;
+    backdrop-filter: none;
   }
 
   /* Reads as a target rather than as a panel that happened to open. */

@@ -506,12 +506,18 @@ export class PainterVisual extends Canvas2DVisual {
 
         // A solid stroke guaranteeing the letterform is filled, then a textured
         // one over it. Texture alone left pinholes inside the glyphs.
+        //
+        // A quarter fuller than before: 1.45 and 1.28 became 1.81 and 1.60, on
+        // the note that the type carried too much white space inside it. The
+        // dabs still sit on the same grid, so the letterforms do not grow -
+        // they only close up, which is the difference between painted type and
+        // stencilled type.
         out.push({
           layer: 1.9,
           x: originX + (x + 0.5) * cellW,
           y: originY + (y + 0.5) * scaleY,
-          length: cellW * 1.45,
-          width: scaleY * 1.28,
+          length: cellW * 1.81,
+          width: scaleY * 1.60,
           angle: 0,
           colour: inkColour,
           alpha: 1,
@@ -522,8 +528,8 @@ export class PainterVisual extends Canvas2DVisual {
           // the gaps between letters, which is what made words unreadable.
           x: originX + (x + 0.5) * cellW + (random() - 0.5) * cellW * 0.3,
           y: originY + (y + 0.5) * scaleY + (random() - 0.5) * scaleY * 0.3,
-          length: cellW * 1.06,
-          width: scaleY * 0.85,
+          length: cellW * 1.33,
+          width: scaleY * 1.06,
           angle: (random() - 0.5) * 0.18,
           colour: inkColour,
           alpha: 0.92,
