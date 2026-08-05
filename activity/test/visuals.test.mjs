@@ -272,3 +272,31 @@ for (const [name, Visual] of Object.entries(VISUALS)) {
 }
 
 console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores survived)`);
+
+// --- a renderer that dies must not poison the next one -----------------------
+// Every visualisation shares one canvas and one 2D context. Pulse sets
+// `globalCompositeOperation = 'lighter'` near the top of its render and restores
+// it on the last line, so an exception in between left every *other*
+// visualisation compositing additively - the whole set went white, and a fault
+// in one renderer looked like a fault in all of them.
+{
+  const context = recordingContext();
+  const canvas = canvasWith(context);
+
+  // Leave the context exactly as a renderer that threw mid-frame would.
+  context.globalCompositeOperation = 'lighter';
+  context.globalAlpha = 0.3;
+  context.filter = 'blur(4px)';
+
+  const visual = new BarsVisual(canvas);
+  context.calls.length = 0;
+  visual.render(score, 1, 1);
+
+  // `begin` must have restored the defaults before the renderer drew anything.
+  const first = (property) => context.calls.find((call) => call[0] === property);
+  assert.deepEqual(first('globalCompositeOperation'), ['globalCompositeOperation', 'source-over'],
+    'a frame must start in source-over, whatever the previous renderer left');
+  assert.deepEqual(first('globalAlpha'), ['globalAlpha', 1], 'and at full alpha');
+  assert.deepEqual(first('filter'), ['filter', 'none'], 'and with no filter');
+  console.log('context hygiene: 3/3 pass (a crashed renderer cannot poison the next)');
+}

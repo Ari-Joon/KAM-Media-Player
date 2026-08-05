@@ -382,6 +382,29 @@ export class Canvas2DVisual {
   /** Sample lanes and return the drawing context plus dimensions. */
   begin(score, playbackSec) {
     if (this.needsMeasure) this.measure();
+
+    // Start every frame from a known context state.
+    //
+    // All twenty-odd visualisations share one canvas and one 2D context, so
+    // anything left set at the end of a frame is inherited by whatever draws
+    // next. That is survivable while every renderer tidies up after itself, and
+    // it is not survivable when one throws: Pulse sets
+    // `globalCompositeOperation = 'lighter'` near the top of its render and
+    // restores it on the last line, so an exception in between left every
+    // *other* visualisation compositing additively - which turned the whole set
+    // white until the page was reloaded, and made a fault in one renderer look
+    // like a fault in all of them.
+    //
+    // Resetting here rather than in a `finally` in each renderer means a
+    // visualisation cannot poison its neighbours however it fails.
+    const context = this.context;
+    context.globalCompositeOperation = 'source-over';
+    context.globalAlpha = 1;
+    context.filter = 'none';
+    context.shadowBlur = 0;
+    context.shadowColor = 'rgba(0,0,0,0)';
+    context.setTransform(1, 0, 0, 1, 0, 0);
+
     const now = performance.now();
     // Clamped at both ends. The upper bound stops a long stall integrating in
     // one huge step; the lower bound stops a *negative* delta, which can happen

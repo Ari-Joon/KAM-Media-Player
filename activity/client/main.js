@@ -470,6 +470,14 @@ async function main() {
         if (!failed.has(entry.id)) {
           failed.add(entry.id);
           console.error(`${entry.name} failed and was disabled:`, error);
+          // Shown, not only logged. An Activity runs in an iframe inside the
+          // Discord client, where the console is disabled by default - so a
+          // visualisation that dies has, until now, been able to say nothing
+          // at all to the one person who can see it happen.
+          setNotice(`${entry.name} failed: ${error.message ?? error}`);
+          // Long enough to read and copy, short enough not to become
+          // permanent furniture over a working visualisation.
+          setTimeout(() => setNotice(''), 20_000);
         }
         // Never fall back to "None".
         //
