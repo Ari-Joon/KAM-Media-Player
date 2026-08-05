@@ -1183,7 +1183,22 @@ export class PulseVisual extends Canvas2DVisual {
 
         // Collected rather than drawn: points are bucketed by brightness below
         // so the whole field costs a handful of fills instead of one per point.
-        const bucket = Math.min(BUCKETS - 1, Math.floor(Math.min(lit, 1) * BUCKETS));
+        // Clamped at both ends, not just the top.
+        //
+        // `lit` can be negative: `crest` is (swell + 1) / 2, and `swell` reaches
+        // -roughness, which passes -1 as soon as roughness exceeds 1. A negative
+        // `lit` floored to -1 indexes `buckets[-1]`, which is undefined, and the
+        // frame died with "Cannot read properties of undefined (reading
+        // 'push')" - taking the composite mode with it, since the reset is on
+        // the last line of the render.
+        //
+        // Latent for as long as roughness stayed below 1. Making the lane
+        // smoothing asymmetric let energy and bass actually reach the top of
+        // their range, roughness with them, and turned a dormant bug into one
+        // that fired on any loud passage.
+        const bucket = Math.max(0, Math.min(
+          BUCKETS - 1, Math.floor(Math.min(lit, 1) * BUCKETS),
+        ));
         buckets[bucket].push([baseX + displaceX, baseY + displaceY, size, band]);
       }
     }

@@ -300,3 +300,49 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
   assert.deepEqual(first('filter'), ['filter', 'none'], 'and with no filter');
   console.log('context hygiene: 3/3 pass (a crashed renderer cannot poison the next)');
 }
+
+// --- Pulse: a negative brightness must not index off the bucket array --------
+// `lit` can go negative, because `crest` is (swell + 1) / 2 and `swell` reaches
+// -roughness, which passes -1 once roughness exceeds 1. Flooring that gave -1,
+// `buckets[-1]` is undefined, and the frame died on `.push` - taking the
+// composite mode with it, because Pulse restores it on its last line. Latent
+// until the lane smoothing was made asymmetric and energy and bass could
+// actually reach the top of their range.
+{
+  const loud = {
+    ...score,
+    // No usable tempo, so no repeating beats and therefore no shockwaves. The
+    // troughs only go negative where nothing is brightening them, which in a
+    // real track is a loud sustained passage between transients.
+    timing: { ...score.timing, tempo_bpm: 0, beats: [], tempo_confidence: 0 },
+    lanes: {
+      ...score.lanes,
+      // roughness = 0.35 + energy * 0.75 + bass * 0.30, so this is its ceiling.
+      energy: lane(() => 1),
+      bass: lane(() => 1),
+      // No spectrum energy, so no wave brightens the troughs back above zero.
+      spectrum: lane(() => Array.from({ length: 16 }, () => 0)),
+    },
+  };
+
+  // A full-size canvas and enough frames for the smoothing to saturate: the
+  // troughs only go negative once roughness passes 1, which needs energy and
+  // bass near the top of their range, and only some grid points sample the
+  // deepest trough of the three combined swells.
+  const context = recordingContext();
+  const big = { ...canvasWith(context), clientWidth: 1920, clientHeight: 1080, width: 1920, height: 1080 };
+  const visual = new PulseVisual(big);
+  let threw = null;
+  try {
+    for (let frame = 0; frame < 240; frame++) visual.render(loud, frame * 0.05, frame * 0.05);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert.equal(threw, null, `Pulse threw on a loud passage: ${threw}`);
+  // Honest about what this covers: a smoke test over a loud, wave-free passage,
+  // not a reproduction. The original failure needs the deepest trough of three
+  // combined swells to coincide with a point no shockwave is lighting, and that
+  // alignment could not be forced here - the arithmetic was confirmed instead
+  // (minimum lit -0.110, which floors to bucket -1) and the fix is a clamp.
+  console.log('pulse: 1/1 pass (survives a loud wave-free passage)');
+}
