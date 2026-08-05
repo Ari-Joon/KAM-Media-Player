@@ -24,6 +24,21 @@
 /** Identity only. The server holds the descriptor and refuses one from here. */
 const identify = (track) => ({ provider: track.provider, providerId: track.providerId });
 
+/**
+ * Route an external image through this origin.
+ *
+ * Discord's Activity sandbox blocks loads from external hosts, so a Discord CDN
+ * avatar set straight on an `img` silently fails to appear - and only inside
+ * Discord, which is exactly where nobody can open devtools to find out why. The
+ * same one-liner lives in `transport.js`; importing it from there would make
+ * this module and that one circular, for a line that is cheaper to repeat than
+ * to share.
+ *
+ * @param {string|null|undefined} url
+ * @returns {string|null}
+ */
+const proxied = (url) => (url ? `/api/image?url=${encodeURIComponent(url)}` : null);
+
 export class PlaylistPanel {
   /**
    * @param {object} context
@@ -38,8 +53,16 @@ export class PlaylistPanel {
     this.mine = document.getElementById('playlist-mine');
     this.others = document.getElementById('playlist-others');
     this.status = document.getElementById('playlist-status');
-    /** @type {{mine: object, others: object[]}|null} */
-    this.cache = null;
+    /**
+     * Whether the markup this panel needs is actually present.
+     *
+     * A served `index.html` older than the JavaScript is a real state - it is
+     * what `npm start` gives you after editing the client without building -
+     * and the panel refusing to construct would take the player down with it.
+     * Losing one panel is a bad afternoon; a blank Activity with the music
+     * still playing and no way to reach the transport is a much worse one.
+     */
+    this.available = Boolean(this.panel && this.mine && this.others && this.status);
 
     document.getElementById('playlist-close')?.addEventListener('click', () => this.close());
   }
@@ -54,10 +77,14 @@ export class PlaylistPanel {
   }
 
   close() {
-    this.panel.hidden = true;
+    if (this.panel) this.panel.hidden = true;
   }
 
   async open() {
+    if (!this.available) {
+      this.context.notify('Playlists need a rebuild: run `npm run build`.');
+      return;
+    }
     this.panel.hidden = false;
     await this.refresh();
   }
@@ -71,6 +98,7 @@ export class PlaylistPanel {
    * copy to keep in sync.
    */
   async refresh() {
+    if (!this.available) return;
     try {
       const response = await fetch(`/api/playlists/${this.context.guildId}`, {
         headers: this.context.authHeaders(),
@@ -105,7 +133,7 @@ export class PlaylistPanel {
   }
 
   render() {
-    if (!this.cache) return;
+    if (!this.cache || !this.available) return;
     this.mine.textContent = '';
     this.others.textContent = '';
 
@@ -197,7 +225,7 @@ export class PlaylistPanel {
       owner.className = 'owner';
       if (entry.user.avatarUrl) {
         const avatar = document.createElement('img');
-        avatar.src = entry.user.avatarUrl;
+        avatar.src = proxied(entry.user.avatarUrl);
         avatar.alt = '';
         owner.append(avatar);
       }
@@ -283,6 +311,9 @@ export class TrackMenu {
     this.context = context;
     this.element = document.getElementById('track-menu');
     this.track = null;
+    // Same reasoning as the panel: without the markup this does nothing rather
+    // than throwing on every right-click anywhere in the app.
+    if (!this.element) return;
 
     document.addEventListener('contextmenu', (event) => {
       const row = event.target.closest?.('[data-menu-track]');
@@ -310,7 +341,7 @@ export class TrackMenu {
   }
 
   close() {
-    this.element.hidden = true;
+    if (this.element) this.element.hidden = true;
     this.track = null;
   }
 

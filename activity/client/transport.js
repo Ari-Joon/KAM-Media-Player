@@ -220,7 +220,6 @@ export class Transport {
       favSearch: document.getElementById('fav-search'),
       favSearchClear: document.getElementById('fav-search-clear'),
       favFolders: document.getElementById('fav-folders'),
-      playlistsButton: document.getElementById('t-playlists'),
       tabs: document.getElementById('deck-tabs'),
       deckShuffle: document.getElementById('deck-shuffle'),
       deckPlay: document.getElementById('deck-play'),
@@ -383,9 +382,15 @@ export class Transport {
       this.elements.favPanel.hidden = true;
     });
 
-    this.elements.playlistsButton.addEventListener('click', (event) => {
+    // Deliberately not in `this.elements`, which is checked for completeness and
+    // throws when anything is missing. That check exists to catch a served
+    // `index.html` older than the JavaScript, and it is the right behaviour for
+    // the transport's own controls - but it would mean a missing playlists
+    // button taking down the player, the queue and the visualisations with it.
+    const playlistsButton = document.getElementById('t-playlists');
+    playlistsButton?.addEventListener('click', (event) => {
       event.stopPropagation();
-      if (this.playlists.panel.hidden) {
+      if (this.playlists.panel?.hidden !== false) {
         this.closePanels();
         this.playlists.open();
       } else {
@@ -394,7 +399,7 @@ export class Transport {
     });
     // Clicks inside must not reach the document handler that closes panels -
     // renaming a playlist means clicking into a field inside this panel.
-    this.playlists.panel.addEventListener('click', (event) => event.stopPropagation());
+    this.playlists.panel?.addEventListener('click', (event) => event.stopPropagation());
 
     // Queue panel as a drop target for favourites.
     //
