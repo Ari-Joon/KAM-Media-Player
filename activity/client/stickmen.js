@@ -2088,8 +2088,8 @@ const FORMATIONS = [
  *
  * Named rather than indexed so the intent survives someone reordering `SHOTS`.
  */
-const SHOT_PLAN = {
-  quiet: ['wide', 'sidelong', 'overhead', 'crane'],
+export const SHOT_PLAN = {
+  quiet: ['wide', 'sidelong', 'high wide', 'crane'],
   build: ['crane', 'tracking', 'wide', 'sidelong'],
   // `wide` earns a place here too. Measured over a loud track, the moment
   // classifier called almost every bar a chorus, so a vocabulary of four close
@@ -2117,7 +2117,7 @@ function barsPerCut(moment, energy) {
   return 8;
 }
 
-const SHOTS = [
+export const SHOTS = [
   {
     name: 'wide', position: [0, 2.2, -9.5], look: [0, 1.0, 0], target: null,
     drift: { amp: [1.6, 0.35, 0.8], period: [17, 11, 23] },
@@ -2127,8 +2127,8 @@ const SHOTS = [
     drift: { amp: [1.1, 0.20, 0.9], period: [13, 9, 19] },
   },
   {
-    name: 'crane', position: [3.2, 5.4, -7.0], look: [0, 0.9, 0], target: null,
-    drift: { amp: [2.2, 1.4, 1.2], period: [21, 15, 26] },
+    name: 'crane', position: [3.2, 4.1, -8.6], look: [0, 1.1, 0], target: null,
+    drift: { amp: [2.2, 0.9, 1.2], period: [21, 15, 26] },
   },
   {
     name: 'close', position: [1.2, 1.5, -2.9], look: [0, 1.3, 0], target: 'pick',
@@ -2142,9 +2142,20 @@ const SHOTS = [
     name: 'sidelong', position: [-7.5, 1.6, 0.5], look: [0, 1.1, 0], target: null,
     drift: { amp: [0.9, 0.5, 2.6], period: [24, 13, 18] },
   },
+  // Was a near-plan view: 7.5 up, 3.0 out, looking at the floor - about 68
+  // degrees down. These figures are drawn as flat strokes with no volume, so
+  // from up there a raised arm projects onto a few pixels and the whole cast
+  // reads as blobs on a floor. The dancing was not worse from that angle, it
+  // was invisible, which is worse. Now a high three-quarter: high enough to
+  // show the floor pattern and the spacing between figures, shallow enough
+  // (about 19 degrees) that a limb still crosses the frame.
+  //
+  // Same reason `crane` came down from 5.4 to 4.1 and moved back to 8.6. Any
+  // new shot wants its pitch kept under roughly 25 degrees; there is no angle
+  // steep enough to be interesting that these figures survive.
   {
-    name: 'overhead', position: [0.5, 7.5, -3.0], look: [0, 0.6, 0], target: null,
-    drift: { amp: [1.8, 0.9, 1.8], period: [27, 19, 22] },
+    name: 'high wide', position: [1.6, 3.6, -8.2], look: [0, 1.15, 0], target: null,
+    drift: { amp: [1.8, 0.6, 1.8], period: [27, 19, 22] },
   },
   {
     name: 'tracking', position: [4.5, 1.8, -6.0], look: [0, 1.1, 0], target: 'pick',

@@ -1134,7 +1134,7 @@ export class PulseVisual extends Canvas2DVisual {
         x: width * (0.5 + Math.cos(angle) * 0.28),
         y: height * (0.5 + Math.sin(angle) * 0.26),
         radius: 0,
-        strength: 0.55 + lanes.energy * 0.65,
+        strength: 0.473 + lanes.energy * 0.559,
       });
       // A second wave on heavy beats, offset, so a bass-driven passage has
       // several fronts crossing at once rather than one at a time.
@@ -1143,7 +1143,7 @@ export class PulseVisual extends Canvas2DVisual {
           x: width * (0.5 - Math.cos(angle) * 0.22),
           y: height * (0.5 - Math.sin(angle) * 0.20),
           radius: 0,
-          strength: (0.35 + lanes.bass * 0.55),
+          strength: (0.301 + lanes.bass * 0.473),
         });
       }
       if (this.waves.length > 20) this.waves.shift();
@@ -1184,7 +1184,28 @@ export class PulseVisual extends Canvas2DVisual {
     }));
     // The sea gets rougher with the track rather than the swell simply getting
     // brighter, which is what keeps quiet passages looking like calm water.
-    const roughness = 0.35 + lanes.energy * 0.75 + lanes.bass * 0.30;
+    //
+    // Every music-driven gain in this renderer - wave strength, roughness,
+    // displacement, dot size, foam - carries a common factor of 0.86 against
+    // what it was. At full energy the field displaced, brightened and swelled
+    // hard enough that neighbouring points overlapped into solid white sheets
+    // under `lighter`, leaving a wave front nothing calm to read against.
+    //
+    // 0.86 rather than the 0.75 that "a quarter less" suggests, because these
+    // gains multiply: strength feeds displacement *and* brightness, and
+    // brightness feeds dot size, so a uniform 0.75 compounds into far more than
+    // a quarter of the picture. Swept in the preview harness over the loudest
+    // five seconds of a 191s track, measuring the share of pixels above 0.35
+    // luminance against the same passage at the old gains: 0.90 gave -19%, 0.86
+    // gave -25%, 0.75 gave -41% and looked flat. Blown-out pixels, above 0.85,
+    // fall faster than that at every setting, which is the point - the sheets
+    // of white go first and the wave fronts stay.
+    //
+    // Compare only within one run. The absolute percentages moved between page
+    // states for reasons never chased down, while the paired ratios repeated
+    // exactly in both orders, so a sweep has to render every variant it is
+    // comparing in the same pass.
+    const roughness = 0.301 + lanes.energy * 0.645 + lanes.bass * 0.258;
 
     for (let cx = 0; cx < columns; cx++) {
       for (let cy = 0; cy < rows; cy++) {
@@ -1211,7 +1232,7 @@ export class PulseVisual extends Canvas2DVisual {
           const offset = distance - wave.radius;
           const influence = Math.exp(-(offset * offset) / (spacing * spacing * 9));
           if (influence < 0.01) continue;
-          const push = influence * wave.strength * spacing * 1.4;
+          const push = influence * wave.strength * spacing * 1.204;
           displaceX += (dx / distance) * push;
           displaceY += (dy / distance) * push;
           brightness += influence * wave.strength;
@@ -1226,13 +1247,13 @@ export class PulseVisual extends Canvas2DVisual {
         // bunching is most of what makes a still frame read as water rather than
         // as a grid with a brightness gradient painted over it.
         const crest = (swell + 1) / 2;
-        displaceX += Math.cos(SWELLS[0].angle) * swell * spacing * 0.55;
-        displaceY += Math.sin(SWELLS[0].angle) * swell * spacing * 0.55;
+        displaceX += Math.cos(SWELLS[0].angle) * swell * spacing * 0.473;
+        displaceY += Math.sin(SWELLS[0].angle) * swell * spacing * 0.473;
 
         // Height reads as light: a crest catches the sky, a trough sits in
         // shadow. Added to the shockwave term so a beat still lifts the surface.
         const lit = brightness + crest * 0.55;
-        const size = (0.7 + crest * 1.1) + band * 1.4 + Math.min(brightness, 1.4) * 3.0;
+        const size = (0.7 + crest * 1.1) + band * 1.204 + Math.min(brightness, 1.4) * 2.58;
 
         // Foam, only where a crest is genuinely breaking. Gated hard so calm
         // water carries none at all - foam everywhere is the thing that makes
@@ -1286,7 +1307,7 @@ export class PulseVisual extends Canvas2DVisual {
     // aerated water and takes almost no colour from the sea beneath it.
     if (foam.length > 0) {
       context.fillStyle = mix('#ffffff', to, 0.10);
-      context.globalAlpha = 0.30 + lanes.energy * 0.45;
+      context.globalAlpha = 0.258 + lanes.energy * 0.387;
       context.beginPath();
       for (const [fx, fy, fr] of foam) {
         context.moveTo(fx + fr, fy);

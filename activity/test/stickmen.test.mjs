@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { StickMenVisual, PHRASE_BARS, moveForSection } from '../client/stickmen.js';
+import { StickMenVisual, PHRASE_BARS, moveForSection, SHOTS, SHOT_PLAN } from '../client/stickmen.js';
 
 // The renderer only needs the canvas API's side effects. Recording method calls
 // is unnecessary here because the regression is choreography state, but every
@@ -596,5 +596,30 @@ const unreachable = NAMED_DANCES.filter((name) => !reachable.has(name));
 assert.equal(unreachable.length, 0,
   `these dances can never be chosen: ${unreachable.join(', ')}`);
 
+// Every shot named in the plan must resolve to a real setup. `pickShot` falls
+// back to `SHOTS[0]` on a miss, so renaming a shot without updating the plan
+// does not throw - it silently pins that whole moment to the wide, and the only
+// symptom is a track that never cuts anywhere interesting.
+for (const [moment, names] of Object.entries(SHOT_PLAN)) {
+  for (const name of names) {
+    assert.ok(SHOTS.some((shot) => shot.name === name),
+      `SHOT_PLAN.${moment} names "${name}", which is not in SHOTS`);
+  }
+}
+
+// No shot may look down more steeply than 25 degrees. These figures are flat
+// strokes with no volume: past about that, limbs project onto almost nothing
+// and the cast reads as blobs on a floor. The overhead shot sat at 68 degrees
+// and made good choreography look broken.
+for (const shot of SHOTS) {
+  const rise = shot.position[1] - shot.look[1];
+  const run = Math.hypot(shot.position[0] - shot.look[0], shot.position[2] - shot.look[2]);
+  // Drift lifts the camera above its base position, so the worst case is what
+  // matters, not the nominal.
+  const worst = (Math.atan2(rise + shot.drift.amp[1], run) * 180) / Math.PI;
+  assert.ok(worst <= 25,
+    `shot "${shot.name}" looks down ${worst.toFixed(0)} degrees at the top of its drift`);
+}
+
 performance.now = realNow;
-console.log('StickMenVisual: 56/56 pass (planting, anticipation, quiet, phrase, canon, 15 dances)');
+console.log('StickMenVisual: 58/58 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging)');
