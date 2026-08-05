@@ -26,7 +26,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, unlink, stat, readdir } from 'node:fs/promises';
+import { mkdir, unlink, stat, readdir, rename } from 'node:fs/promises';
 import { SoundCloudApi } from './soundcloud.js';
 import path from 'node:path';
 import { parseYouTubeId } from './resolve.js';
@@ -616,8 +616,58 @@ async function pruneCache(directory, keepStem = '') {
   }
 }
 
+/**
+ * A complete, playable audio file already in the cache for this stem.
+ *
+ * "Complete" has to be established rather than assumed: a file left by an
+ * interrupted download is the right size for nothing in particular and would
+ * otherwise be handed to the voice player as though it were the track. The same
+ * two checks the downloader applies to its own output are applied here - a
+ * plausible size, and audio ffprobe can actually read.
+ *
+ * @param {string} directory
+ * @param {string} stem
+ * @returns {Promise<string|null>} Path to the file, or null.
+ */
+async function usableAudio(directory, stem) {
+  const names = (await readdir(directory).catch(() => []))
+    // `.part.` is a download in flight; it is not a track.
+    .filter((name) => name.startsWith(`${stem}.`) && !name.includes('.part.'));
+
+  for (const name of names) {
+    const full = path.join(directory, name);
+    const info = await stat(full).catch(() => null);
+    if (!info || info.size < 1024) continue;
+    try {
+      await probeAudio(full);
+      return full;
+    } catch {
+      // Present but unplayable - a truncated file from a crash. Remove it so
+      // the download below is not blocked by it for ever.
+      await unlink(full).catch(() => {});
+    }
+  }
+  return null;
+}
+
 async function download(url, directory, stem, format) {
-  // Clear any leftovers from a previous failed attempt with the same stem.
+  // Reuse a copy that is already here.
+  //
+  // There has been a 3GB least-recently-used cache in this directory all along,
+  // and nothing ever read from it: this function opened by deleting every file
+  // matching the stem, and the player deleted the current track's audio the
+  // moment it moved on. So skipping back to the song that was playing a minute
+  // ago fetched the whole thing again, and every skip cost a full download
+  // before the button could answer.
+  const ready = await usableAudio(directory, stem);
+  if (ready) {
+    console.log(`audio reused: ${path.basename(ready)}`);
+    return ready;
+  }
+
+  // Written under a temporary name and renamed on success, so an interrupted
+  // download can never be mistaken for a complete one by the check above.
+  const partStem = `${stem}.part`;
   for (const name of await readdir(directory).catch(() => [])) {
     if (name.startsWith(stem)) await unlink(path.join(directory, name)).catch(() => {});
   }
@@ -625,12 +675,20 @@ async function download(url, directory, stem, format) {
   await run(YTDLP_BIN, [
     '--quiet', '--no-warnings', '--no-playlist',
     '-f', format,
-    '-o', path.join(directory, `${stem}.%(ext)s`),
+    '-o', path.join(directory, `${partStem}.%(ext)s`),
     url,
   ]);
 
+  // Move each part file to its final name before anything else can see it.
+  for (const name of await readdir(directory).catch(() => [])) {
+    if (!name.startsWith(partStem)) continue;
+    const from = path.join(directory, name);
+    const to = path.join(directory, name.replace(`${partStem}.`, `${stem}.`));
+    await rename(from, to).catch(() => {});
+  }
+
   const produced = (await readdir(directory))
-    .filter((name) => name.startsWith(stem))
+    .filter((name) => name.startsWith(stem) && !name.includes('.part.'))
     .map((name) => path.join(directory, name));
   if (produced.length === 0) {
     throw new Error('yt-dlp reported success but produced no file.');

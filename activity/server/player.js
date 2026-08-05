@@ -22,7 +22,6 @@
  */
 
 import { spawn } from 'node:child_process';
-import { unlink } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import {
   generateDependencyReport,
@@ -64,6 +63,8 @@ export class GuildPlayer {
      * @type {null | ((track: object) => Promise<string>)}
      */
     this.loadAudio = null;
+    /** Identity of the track being fetched ahead, so only one runs at a time. */
+    this.prefetching = null;
 
     /**
      * Called after a new track starts, so the server can analyse it.
@@ -187,7 +188,43 @@ export class GuildPlayer {
     this.player.play(resource);
 
     this.onTrackStart?.(track, this.audioPath);
+    // Deliberately not awaited: the point is that it happens during playback.
+    this.prefetchUpcoming();
     return track;
+  }
+
+  /**
+   * Fetch the next track's audio while this one plays.
+   *
+   * Skipping used to cost a whole download before the button could answer,
+   * because `advance` starts the next track and starting a track is what
+   * fetches it. There are typically minutes of playback going spare in which to
+   * do that work instead, and the downloader now reuses whatever is already on
+   * disk - so by the time anyone presses skip the file is usually there and the
+   * change is immediate.
+   *
+   * Failures are swallowed on purpose. This is speculative work: if the track
+   * turns out to be unfetchable, that should surface when someone actually
+   * asks for it, with the error that route already reports, rather than as a
+   * mysterious log line during the previous song.
+   */
+  prefetchUpcoming() {
+    if (!this.loadAudio) return;
+    const next = this.queue.upcoming()[0];
+    if (!next?.providerId) return;
+
+    const key = `${next.provider}:${next.providerId}`;
+    // One at a time, and never the same track twice: `startCurrent` runs on
+    // every track change, and without this a long queue would start a fetch per
+    // change and have several running at once.
+    if (this.prefetching === key) return;
+    this.prefetching = key;
+
+    Promise.resolve(this.loadAudio(next))
+      .catch(() => {})
+      .finally(() => {
+        if (this.prefetching === key) this.prefetching = null;
+      });
   }
 
   /**
@@ -311,10 +348,14 @@ export class GuildPlayer {
 
   /** Delete the temporary audio file for the finished track. */
   releaseAudio() {
-    if (!this.audioPath) return;
-    const target = this.audioPath;
+    // The file is kept, not deleted.
+    //
+    // Deleting it here threw away the one thing that makes going back
+    // instant, and it fought the 3GB least-recently-used cache the download
+    // path already maintains: every skip backwards re-fetched a track that had
+    // been on disk seconds earlier. Letting the cache do its job means
+    // "previous" is usually free, and the budget still bounds the directory.
     this.audioPath = null;
-    unlink(target).catch(() => {});
   }
 
   /**
