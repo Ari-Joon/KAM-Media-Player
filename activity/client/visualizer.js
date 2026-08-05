@@ -47,7 +47,7 @@ uniform float uSeed;        // per-track, so no two tracks share an arrangement
  * hue jitter, all driven at high frequency - the result read as shaking rather
  * than moving, and was genuinely unpleasant to look at.
  *
- * This is built instead from thirty-six soft metaballs drifting along slow
+ * This is built instead from sixty soft metaballs drifting along slow
  * incommensurate orbits. Nothing in the image changes faster than the eye wants
  * to track: the audio scales sizes and colour, it never jerks positions. Beat
  * response is a gentle swell in radius, not a flash.
@@ -82,11 +82,13 @@ float blob(vec2 uv, vec2 centre, float radius, float squash, float twist) {
   p.x *= squash;
   p.y /= squash;
 
-  // Reach swept against body count and wax fraction over five points in a
-  // track: x1.8 gave 6.0 bodies but only 9.7% wax (a sparse scatter), x4.2 gave
-  // 46% wax in 1.0 body (the old problem again). x2.6 sits at ~16% wax in ~5
-  // separate bodies with the largest covering 7% of the frame, which is a lamp.
-  float reach = radius * 2.00;
+  // Reach and blob count are one decision. Both fill the frame and both merge
+  // it, and past a point more blobs give *fewer* visible bodies rather than
+  // more: measured over five points in a track at reach 1.70, a quiet passage
+  // shows 7.6 separate bodies with 36 blobs, 7.0 with 48 and 6.0 with 60, while
+  // coverage climbs 16.3% -> 20.1% -> 26.3%. Sixty at 1.70 is the most colour
+  // on screen that still resolves into distinct wax rather than a single sheet.
+  float reach = radius * 1.70;
   float q2 = dot(p, p) / (reach * reach);
   if (q2 >= 1.0) return 0.0;
   float k = 1.0 - q2;
@@ -131,16 +133,15 @@ void main() {
   // it was a single merged body. A frame that inflates almost sevenfold and then
   // collapses is not calm, and it is empty half the time by construction.
   //
-  // Now 22.6% -> 29.0% -> 39.6%: a 1.7x swing rather than 6.7x, with the quiet
-  // floor more than doubled. The music still moves it; it no longer throws it.
+  // The swing is now roughly 1.7x rather than 6.7x, with the quiet floor more
+  // than doubled. The music still moves it; it no longer throws it.
   float swell = 0.120 + uBass * 0.020 + uBeat * 0.005 + uEnergy * 0.012;
 
-  // Thirty-six blobs, each with its own hue, tracked separately.
+  // Sixty blobs, each with its own hue, tracked separately.
   //
-  // Sixteen left the frame far too empty, and twenty-four still did. At 36 the
-  // reach has to come down with the count or they merge: 36 at the old reach of
-  // 2.6 was 36.1% wax but only 2.4 separate bodies. Paired with reach 2.30 it
-  // is 29.3% in 3.8 bodies - fuller than 24 blobs managed, and still a lamp.
+  // Sixteen left the frame far too empty, and neither 24 nor 36 filled it.
+  // Sixty does, provided the reach comes down with the count - at the reach 36
+  // used, sixty blobs merge into one sheet.
   //
   // The previous version summed every contribution into one scalar and coloured
   // the total with a single hue, which is why it read as one mass however many
@@ -156,13 +157,13 @@ void main() {
   // A lit sphere needs a normal, and the usual routes to one are both
   // expensive here: screen-space derivatives are a WebGL1 extension this cannot
   // rely on, and sampling the field again at offsets would run the whole
-  // thirty-six-blob loop three times over. But each blob already knows which way
+  // sixty-blob loop three times over. But each blob already knows which way
   // is "out" - it is simply the direction from its centre to this pixel - so
   // summing that, weighted by how much each blob contributes, gives the
   // outward direction of whichever blob owns the pixel for free.
   vec2 outward = vec2(0.0);
 
-  for (int i = 0; i < 36; i++) {
+  for (int i = 0; i < 60; i++) {
     // Offset by the track's seed, so the cast is a different set of phases,
     // columns, sizes and hues for every song. Everything below is a function of
     // "fi", so without this every track ran the identical arrangement - which
@@ -610,7 +611,7 @@ export class ShaderVisualizer {
     const lavaDelta = Math.min(Math.max(scoreSec - (this.lastLavaSec ?? scoreSec), 0), 0.1);
     this.lastLavaSec = scoreSec;
     this.lavaPhase = (this.lavaPhase ?? 0)
-      + lavaDelta * (0.0325 + this.smoothed.flux * 0.025);
+      + lavaDelta * (0.016 + this.smoothed.flux * 0.012);
 
     gl.uniform2f(this.uniforms.uResolution, this.canvas.width, this.canvas.height);
     gl.uniform1f(this.uniforms.uTime, this.lavaPhase);
