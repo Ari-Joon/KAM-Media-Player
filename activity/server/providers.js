@@ -30,6 +30,9 @@ import { mkdir, unlink, stat, readdir, rename } from 'node:fs/promises';
 import { SoundCloudApi } from './soundcloud.js';
 import path from 'node:path';
 import { parseYouTubeId } from './resolve.js';
+import { logger } from './log.js';
+
+const log = logger('providers');
 
 const {
   YOUTUBE_API_KEY, YTDLP_BIN = 'yt-dlp',
@@ -48,9 +51,9 @@ const {
 const soundcloudApi = new SoundCloudApi(SOUNDCLOUD_CLIENT_ID, SOUNDCLOUD_CLIENT_SECRET);
 
 if (soundcloudApi.available) {
-  console.log('soundcloud: using the official API (licensed streaming)');
+  log.info('soundcloud: using the official API (licensed streaming)');
 } else {
-  console.log('soundcloud: no API credentials set, falling back to extraction. '
+  log.warn('soundcloud: no API credentials set, falling back to extraction. '
     + 'See MEDIA_POLICY.md - the official API is the only path suitable for a '
     + 'deployment you intend to operate commercially.');
 }
@@ -504,7 +507,7 @@ async function fetchSoundCloudAudio(track, directory) {
         '-vn', '-c:a', 'copy',
         target,
       ], 180_000);
-      console.log(`soundcloud: fetched via official API (${protocol})`);
+      log.debug(`soundcloud: fetched via official API (${protocol})`);
       return target;
     } catch (error) {
       console.error(`soundcloud api audio: ${error.message}; falling back to extraction`);
@@ -661,7 +664,7 @@ async function download(url, directory, stem, format) {
   // before the button could answer.
   const ready = await usableAudio(directory, stem);
   if (ready) {
-    console.log(`audio reused: ${path.basename(ready)}`);
+    log.debug(`audio reused: ${path.basename(ready)}`);
     return ready;
   }
 

@@ -19,8 +19,9 @@
 
 import 'dotenv/config';
 import { spawn, execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
+import { classifyChildLine, write } from './server/log.js';
 
 /** ANSI colours, skipped when the output is not a terminal. */
 const colour = process.stdout.isTTY
@@ -29,6 +30,14 @@ const colour = process.stdout.isTTY
 
 /** Everything started here, so they can be shut down together. */
 const children = [];
+
+/**
+ * Where the last announced hostname is remembered.
+ *
+ * Beside the cache rather than in the repo, and holding one line of text that
+ * is already public - it is the address the tunnel just advertised.
+ */
+const LAST_HOST_FILE = 'cache/.last-tunnel-host';
 
 /**
  * Set when the tunnel reports a failure.
@@ -75,8 +84,17 @@ function start(label, command, args, onLine, { shell } = {}) {
       if (label === 'tunnel' && /\bERROR\b|ERR_NGROK|authentication failed/i.test(line)) {
         tunnelFailed = true;
       }
+      // Matched before filtering, never after: the address and the failure
+      // detection have to see every line even when nothing is printed.
       onLine?.(line);
-      console.log(`${colour.dim}[${label}]${colour.off} ${line}`);
+
+      const { show, level } = classifyChildLine(label, line);
+      if (!show) continue;
+      // The server logs through `server/log.js` and arrives already formatted,
+      // stamped and scoped, so it is passed through untouched. Prefixing it
+      // again would put two timestamps on every line.
+      if (label === 'server') console.log(line);
+      else write(level, label, line.replace(/^\S+\s+(INF|WRN|ERR)\s+/, ''));
     }
   };
 
@@ -156,6 +174,25 @@ let announced = false;
 function announce(host, stable) {
   if (announced || tunnelFailed) return;
   announced = true;
+
+  // Whether this address differs from the one last announced.
+  //
+  // A quick tunnel gets a new hostname on every start, and the Developer Portal
+  // has to be edited to match or the Activity loads nothing and shows a white
+  // screen - with a healthy server, a working tunnel, and no error anywhere to
+  // explain it. Knowing the address is new is the difference between a ten
+  // second fix and an evening of debugging the wrong thing.
+  let changed = null;
+  try {
+    const previous = existsSync(LAST_HOST_FILE)
+      ? readFileSync(LAST_HOST_FILE, 'utf8').trim()
+      : '';
+    changed = previous ? previous !== host : null;
+    writeFileSync(LAST_HOST_FILE, host);
+  } catch {
+    // Never worth failing a launch over. `changed` stays null and the banner
+    // simply says nothing either way.
+  }
   // Delayed so it lands below the tunnel's own banner rather than being
   // scrolled away by it.
   setTimeout(() => {
@@ -165,7 +202,14 @@ ${colour.gold}${'='.repeat(68)}
 ${'='.repeat(68)}${colour.off}
 
   ${colour.bold}https://${host}${colour.off}
-
+${changed === false ? `
+  ${colour.dim}Same address as last run. If the Developer Portal already points
+  at it, there is nothing to do - start playing.${colour.off}
+` : ''}${changed === true ? `
+  ${colour.bold}This is a NEW address. The Developer Portal is still pointing at
+  the last one, so the Activity will show a white screen until you
+  update it.${colour.off}
+` : ''}
 ${stable ? `  ${colour.dim}This address is permanent. If the Developer Portal already points
   at it, there is nothing to do - start playing.${colour.off}
 

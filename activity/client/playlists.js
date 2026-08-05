@@ -53,6 +53,46 @@ export class PlaylistPanel {
     this.mine = document.getElementById('playlist-mine');
     this.others = document.getElementById('playlist-others');
     this.status = document.getElementById('playlist-status');
+    this.searchBox = document.getElementById('playlist-search');
+    this.searchClear = document.getElementById('playlist-search-clear');
+    this.ownerFilter = document.getElementById('playlist-owner');
+
+    /**
+     * The view, which is personal and local.
+     *
+     * Filtering happens here rather than on the server for the same reason it
+     * does for favourites: the playlists are shared but *looking* at them is
+     * not, and one person searching should not change what anyone else sees.
+     * The whole set is already in hand, so there is nothing to fetch.
+     */
+    this.view = { query: '', owner: '' };
+
+    this.searchBox?.addEventListener('input', () => {
+      this.view.query = this.searchBox.value.trim().toLowerCase();
+      if (this.searchClear) this.searchClear.hidden = this.view.query === '';
+      this.render();
+    });
+    // Typing in the panel must not reach the page's keyboard shortcuts - space
+    // would otherwise pause the music mid-word.
+    this.searchBox?.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        this.searchBox.value = '';
+        this.view.query = '';
+        if (this.searchClear) this.searchClear.hidden = true;
+        this.render();
+      }
+    });
+    this.searchClear?.addEventListener('click', () => {
+      this.searchBox.value = '';
+      this.view.query = '';
+      this.searchClear.hidden = true;
+      this.render();
+    });
+    this.ownerFilter?.addEventListener('change', () => {
+      this.view.owner = this.ownerFilter.value;
+      this.render();
+    });
     /**
      * Whether the markup this panel needs is actually present.
      *
@@ -132,14 +172,84 @@ export class PlaylistPanel {
     }
   }
 
+  /**
+   * Write a label into an element, marking the part that matched the search.
+   *
+   * Built from text nodes rather than by assigning `innerHTML`, because the
+   * label is a track title from a third party and the query is whatever was
+   * typed. Neither is trustworthy as markup, and a title containing a tag would
+   * otherwise be parsed as one.
+   *
+   * @param {HTMLElement} element
+   * @param {string} label
+   */
+  paintMatch(element, label) {
+    const at = this.view.query
+      ? label.toLowerCase().indexOf(this.view.query)
+      : -1;
+    if (at < 0) {
+      element.textContent = label;
+      return;
+    }
+    const hit = document.createElement('mark');
+    hit.textContent = label.slice(at, at + this.view.query.length);
+    element.append(
+      document.createTextNode(label.slice(0, at)),
+      hit,
+      document.createTextNode(label.slice(at + this.view.query.length)),
+    );
+  }
+
+  /** Whether one track matches the current search. */
+  matches(track) {
+    if (!this.view.query) return true;
+    return `${track.artist ?? ''} ${track.title ?? ''}`.toLowerCase().includes(this.view.query);
+  }
+
+  /**
+   * Keep the member filter's options in step with who has actually shared.
+   *
+   * Rebuilt from the data rather than appended to, so somebody who empties
+   * their public playlist stops being an option - a filter offering a name that
+   * can only ever produce an empty list is worse than no filter.
+   */
+  renderOwners() {
+    if (!this.ownerFilter) return;
+    const chosen = this.view.owner;
+    this.ownerFilter.textContent = '';
+
+    const everyone = document.createElement('option');
+    everyone.value = '';
+    everyone.textContent = `Everyone (${this.cache.others.length})`;
+    this.ownerFilter.append(everyone);
+
+    for (const entry of this.cache.others) {
+      const option = document.createElement('option');
+      option.value = entry.user.id;
+      option.textContent = `${entry.user.username} (${entry.tracks.length})`;
+      this.ownerFilter.append(option);
+    }
+
+    // A filter set to somebody who has since gone quiet falls back to everyone,
+    // rather than silently showing nothing.
+    const stillThere = this.cache.others.some((entry) => entry.user.id === chosen);
+    this.view.owner = stillThere ? chosen : '';
+    this.ownerFilter.value = this.view.owner;
+  }
+
   render() {
     if (!this.cache || !this.available) return;
     this.mine.textContent = '';
     this.others.textContent = '';
+    this.renderOwners();
 
     for (const entry of this.slots) {
       this.mine.append(this.drawPlaylist(entry, { own: true }));
     }
+
+    const visible = this.cache.others.filter(
+      (entry) => !this.view.owner || entry.user.id === this.view.owner,
+    );
 
     if (this.cache.others.length === 0) {
       const empty = document.createElement('p');
@@ -148,7 +258,23 @@ export class PlaylistPanel {
       this.others.append(empty);
       return;
     }
-    for (const entry of this.cache.others) {
+
+    // A search that matches nothing shared hides every card, which without this
+    // looks identical to nobody having shared anything at all.
+    const shown = visible.filter(
+      (entry) => !this.view.query || entry.tracks.some((track) => this.matches(track)),
+    );
+    if (shown.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = this.view.query
+        ? `Nothing matching "${this.searchBox.value.trim()}" in shared playlists.`
+        : 'Nothing shared by that member.';
+      this.others.append(empty);
+      return;
+    }
+
+    for (const entry of shown) {
       this.others.append(this.drawPlaylist(entry, { own: false }));
     }
   }
@@ -245,16 +371,30 @@ export class PlaylistPanel {
       return card;
     }
 
+    const showing = entry.tracks.filter((track) => this.matches(track));
+    // The count stays honest about both numbers while a search is running, so
+    // it is never unclear whether a playlist is short or merely filtered.
+    if (this.view.query) count.textContent = `${showing.length}/${entry.tracks.length}`;
+
+    if (showing.length === 0) {
+      const none = document.createElement('p');
+      none.className = 'filtered-out';
+      none.textContent = 'No matches in this playlist.';
+      card.append(none);
+      return card;
+    }
+
     const list = document.createElement('ol');
-    for (const track of entry.tracks) {
+    for (const track of showing) {
       const row = document.createElement('li');
       row.dataset.provider = track.provider;
       row.dataset.providerId = track.providerId;
 
       const title = document.createElement('span');
       title.className = 'title';
-      title.textContent = track.artist ? `${track.artist} - ${track.title}` : track.title;
-      title.title = title.textContent;
+      const label = track.artist ? `${track.artist} - ${track.title}` : track.title;
+      this.paintMatch(title, label);
+      title.title = label;
       row.append(title);
 
       if (own) {

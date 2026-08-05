@@ -22,6 +22,9 @@
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { logger } from './log.js';
+
+const log = logger('artists');
 
 const ENDPOINT = 'https://musicbrainz.org/ws/2';
 
@@ -60,7 +63,7 @@ export class ArtistInfo {
     try {
       const raw = JSON.parse(await readFile(this.filePath, 'utf8'));
       for (const [name, record] of Object.entries(raw)) this.cache.set(name, record);
-      console.log(`artists: loaded ${this.cache.size} cached lookups`);
+      log.info(`loaded ${this.cache.size} cached lookups`);
     } catch {
       // First run.
     }
@@ -151,7 +154,7 @@ export class ArtistInfo {
     const record = { type: artist.type ?? 'Unknown', members, at: Date.now() };
     this.cache.set(key, record);
     this.persist();
-    console.log(`artists: ${name} -> ${record.type}, ${members} member(s)`);
+    log.debug(`${name} -> ${record.type}, ${members} member(s)`);
     return { type: record.type, members };
   }
 

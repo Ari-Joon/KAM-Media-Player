@@ -38,6 +38,9 @@
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { logger } from './log.js';
+
+const log = logger('playlists');
 
 /** The two slots every user has. Order matters: it is the display order. */
 export const SLOTS = ['public', 'private'];
@@ -106,7 +109,7 @@ export class Playlists {
       // out loud, because the alternative is silently starting empty and
       // looking to the user like every playlist was deleted.
       if (error.code !== 'ENOENT') {
-        console.error('playlists: could not read store:', error.message);
+        log.error(`could not read store: ${error.message}`);
       }
     }
   }
@@ -123,7 +126,7 @@ export class Playlists {
       await writeFile(temporary, JSON.stringify(payload, null, 2));
       await rename(temporary, this.filePath);
     }).catch((error) => {
-      console.error('playlists: write failed:', error.message);
+      log.error(`write failed: ${error.message}`);
     });
     return this.writeChain;
   }

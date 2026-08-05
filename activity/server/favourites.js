@@ -24,6 +24,9 @@
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { logger } from './log.js';
+
+const log = logger('favourites');
 
 /** Most favourites kept per guild. Older entries are dropped beyond this. */
 const MAX_PER_GUILD = 200;
@@ -65,8 +68,8 @@ export class Favourites {
         }
         this.byGuild.set(guildId, entries);
       }
-      if (migrated) console.log(`favourites: migrated ${migrated} single-user entries`);
-      console.log(`favourites: loaded ${this.count()} across `
+      if (migrated) log.info(`migrated ${migrated} single-user entries`);
+      log.info(`loaded ${this.count()} across `
         + `${this.byGuild.size} guild(s)`);
     } catch {
       // No file yet is the normal first-run case.
@@ -91,7 +94,7 @@ export class Favourites {
       await writeFile(temporary, JSON.stringify(payload, null, 2));
       await rename(temporary, this.filePath);
     }).catch((error) => {
-      console.error('favourites: write failed:', error.message);
+      log.error(`write failed: ${error.message}`);
     });
     return this.writeChain;
   }

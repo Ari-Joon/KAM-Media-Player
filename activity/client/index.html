@@ -500,7 +500,9 @@
   @media (hover: none) {
     #transport button { min-width: 42px; min-height: 42px; }
     #transport .chip { min-height: 42px; padding: 10px 13px; }
-    #queue-close, #fav-close, #search-close { width: 38px; height: 38px; font-size: 20px; }
+    #queue-close, #fav-close, #search-close, #playlist-close {
+      width: 38px; height: 38px; font-size: 20px;
+    }
     #queue-list .tools button { width: 32px; height: 32px; font-size: 13px; }
     /* Reorder controls are hover-revealed on desktop; on touch there is no
        hover, so they have to be permanently visible. */
@@ -732,6 +734,47 @@
     padding: 4px 6px;
   }
 
+  /* The heading and the member filter share a line: the filter belongs to the
+     shared section, and putting it anywhere else makes it look as though it
+     filters the viewer's own two playlists as well. */
+  .playlist-shared-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  #playlist-owner {
+    flex: 0 1 auto;
+    max-width: 55%;
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--trace);
+    font-family: var(--sans);
+    font-size: 12px;
+    padding: 4px 7px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #playlist-owner:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.4); }
+
+  /* Shown against a playlist whose tracks are hidden by the current search,
+     so a filtered view never looks like an empty playlist. */
+  #playlist-panel .filtered-out {
+    font-size: 12px;
+    color: var(--trace);
+    padding: 4px 6px;
+    font-style: italic;
+  }
+
+  #playlist-panel mark {
+    background: rgba(255, 210, 26, 0.28);
+    color: inherit;
+    border-radius: 2px;
+  }
+
   .playlist-heading {
     margin: 16px 0 8px;
     font-family: var(--ui-font);
@@ -813,7 +856,13 @@
     color: #ffd21a;
   }
 
-  #search-close {
+  /* Every panel's close button, in one rule.
+     There were three copies of this with identical values, so the fourth panel
+     arrived without one and its button fell back to the browser default: a pale
+     box in the wrong corner. A close control is the one thing that must look
+     the same everywhere, and one rule means the next panel cannot get it
+     wrong. */
+  #search-close, #fav-close, #playlist-close {
     position: absolute;
     top: 14px;
     right: 14px;
@@ -829,7 +878,10 @@
     cursor: pointer;
   }
 
-  #search-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+  #search-close:hover, #fav-close:hover, #playlist-close:hover {
+    color: #ffd21a;
+    border-color: rgba(255, 210, 26, 0.5);
+  }
 
   #search-input {
     width: 100%;
@@ -911,24 +963,6 @@
     font-size: calc(var(--ui-size) * 0.74);
     color: var(--trace-dim);
   }
-
-  #fav-close {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    appearance: none;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--trace);
-    font-size: 15px;
-    line-height: 1;
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  #fav-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
 
   .search-row { position: relative; margin-bottom: 8px; }
 
@@ -1570,8 +1604,20 @@
       Right-click any track to save it here. Your public playlist is visible to
       everyone in this server.
     </p>
+    <div class="search-row">
+      <input id="playlist-search" type="search" placeholder="Search every playlist"
+             autocomplete="off" spellcheck="false">
+      <button id="playlist-search-clear" title="Clear search" hidden>&times;</button>
+    </div>
     <div id="playlist-mine"></div>
-    <h3 class="playlist-heading">Shared in this server</h3>
+    <div class="playlist-shared-head">
+      <h3 class="playlist-heading">Shared in this server</h3>
+      <!-- Populated with one option per member who has shared a playlist. In a
+           large server the list below is otherwise unusable. -->
+      <select id="playlist-owner" title="Filter by member">
+        <option value="">Everyone</option>
+      </select>
+    </div>
     <div id="playlist-others"></div>
     <p id="playlist-status" class="panel-note"></p>
   </aside>

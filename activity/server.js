@@ -32,6 +32,7 @@ import { getPlayer, findPlayerByChannel, stopAll, logVoiceDependencies } from '.
 import { fetchClip, discard, uploadLimit, isEmbeddable, probe } from './server/embeds.js';
 import { Favourites, avatarUrl } from './server/favourites.js';
 import { Playlists, SLOTS } from './server/playlists.js';
+import { TrafficSummary, requestLogger, logger } from './server/log.js';
 import { AnalyserWorker } from './server/analyser.js';
 import { TokenVerifier, AuthError, bearerToken } from './server/auth.js';
 import { ArtistInfo } from './server/artistinfo.js';
@@ -123,7 +124,7 @@ async function attachScore(player, track, audioPath) {
     const cached = JSON.parse(await readFile(cachePath, 'utf8'));
     player.score = cached;
     player.analysing = false;
-    console.log(`score cache hit: ${track.title}`);
+    log.debug(`score cache hit: ${track.title}`);
     return;
   } catch {
     // Normal for a track nobody has played before.
@@ -234,6 +235,17 @@ await favourites.load();
 
 const playlists = new Playlists(CACHE_DIR);
 await playlists.load();
+
+/**
+ * Scopes for the console.
+ *
+ * Kept short and lowercase so the scope column stays narrow and scannable -
+ * the point of the column is that you can find the subsystem you care about
+ * without reading the messages.
+ */
+const log = logger('server');
+const licence = logger('licensing');
+const voice = logger('voice');
 
 /** Group-size lookups, cached to disk and rate limited. */
 const artistInfo = new ArtistInfo(CACHE_DIR);
@@ -914,16 +926,23 @@ function rateLimit(limit, windowMs) {
   };
 }
 
-app.use((request, response, next) => {
-  const startedAt = Date.now();
-  response.on('finish', () => {
-    console.log(
-      `${request.method} ${request.originalUrl} -> ${response.statusCode} `
-      + `(${Date.now() - startedAt}ms)`,
-    );
-  });
-  next();
-});
+/**
+ * Request logging.
+ *
+ * Every request used to print a line. The Activity polls `/api/now-playing`
+ * about twice a second per viewer and fetches an `/api/image` for every avatar
+ * and every piece of cover art, so one person watching one track produced a
+ * continuous scroll and pushed anything that mattered off the screen within
+ * seconds. Worse, a poll loop failing every single time looked much the same as
+ * one succeeding - both were just lines going past.
+ *
+ * Now the routine successful traffic is counted and reported once a minute,
+ * and anything unusual - a failure, something slow, anything that is not part
+ * of the polling loop - prints immediately. `LOG_LEVEL=debug` brings back the
+ * per-request line.
+ */
+const traffic = new TrafficSummary().start();
+app.use(requestLogger(traffic));
 
 /**
  * Health check. Fetch this through the tunnel to prove Discord's route works:
@@ -1752,14 +1771,14 @@ app.post('/api/control/:channelId', rateLimit(120, 60_000), async (request, resp
 app.use(express.static(CLIENT_DIR));
 
 app.listen(PORT, () => {
-  console.log(`Activity server on :${PORT}`);
+  log.info(`listening on :${PORT}`);
   // Stated once at boot, in the same place every time. The previous single
   // line about SoundCloud scrolled past among the provider and voice logs, and
   // "which terms is this deployment operating under" is not something anyone
   // should have to go looking for.
   const posture = licensingPosture();
-  console.log(`licensing: soundcloud=${posture.soundcloud} youtube=${posture.youtube}`);
-  console.log(`licensing: ${posture.note}`);
+  licence.info(`soundcloud=${posture.soundcloud} youtube=${posture.youtube}`);
+  licence.info(posture.note);
 });
 
 // Register the slash command against every guild the bot joins. Guild-scoped
@@ -1825,7 +1844,7 @@ bot.once(Events.ClientReady, async () => {
   logVoiceDependencies();
   const results = await Promise.all([...bot.guilds.cache.keys()].map(registerCommands));
   const registered = results.filter(Boolean).length;
-  console.log(`Bot ready as ${bot.user.tag} in ${bot.guilds.cache.size} guild(s)`);
+  log.info(`bot ready as ${bot.user.tag} in ${bot.guilds.cache.size} guild(s)`);
   console.log(
     `Registered ${commands.length} commands in ${registered} guild(s): `
     + commands.map((command) => `/${command.name}`).join(' '),
@@ -1883,14 +1902,14 @@ bot.on(Events.VoiceStateUpdate, (oldState, newState) => {
   }
 
   if (leaveTimers.has(guildId)) return;
-  console.log(`[voice ${guildId}] channel empty; leaving in `
+  voice.info(`${guildId}: channel empty; leaving in `
     + `${EMPTY_CHANNEL_GRACE_MS / 1000}s unless someone returns.`);
 
   leaveTimers.set(guildId, setTimeout(() => {
     leaveTimers.delete(guildId);
     const stillEmpty = channel.members.filter((member) => !member.user.bot).size === 0;
     if (stillEmpty) {
-      console.log(`[voice ${guildId}] left an empty channel.`);
+      voice.info(`${guildId}: left an empty channel.`);
       player.stop();
     }
   }, EMPTY_CHANNEL_GRACE_MS));
