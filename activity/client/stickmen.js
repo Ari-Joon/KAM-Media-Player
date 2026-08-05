@@ -2445,6 +2445,33 @@ export class StickMenVisual {
     const intoSection = Math.max(0, scoreSec - (this.sectionStartSec ?? 0));
     const moment = this.momentFor(score, rawEnergy, intoSection);
 
+    // Held for the cast, not just the camera. Cutting faster on a drop tells
+    // you the editor noticed; it does not tell you the dancers did, and a room
+    // full of figures carrying on with their own business through a drop is
+    // the single clearest way to look unaware of the music.
+    this.moment = moment;
+    if (moment === 'drop' && this.lastMoment !== 'drop') {
+      this.dropSec = scoreSec;
+      // Whip onto the lead, without waiting for a cut. The subject is normally
+      // only reassigned at a cut, so a drop inherited whatever the previous
+      // shot was pointed at - measured, 18% of drop time framed a backing
+      // figure while the lead carried the moment.
+      //
+      // Forcing a *cut* here does nothing: a drop is detected at a section
+      // change, which already forces one, and that cut then waits for the next
+      // bar - up to 2.6s at 91bpm, against a drop accent that lasts 2s. So the
+      // camera keeps its angle and pans its subject instead, which is a move a
+      // camera operator would actually make on a drop.
+      if (this.shot?.target === 'pick') this.shotTarget = 0;
+    }
+    this.lastMoment = moment;
+    // Decays over a bar and a half, so the hit is an impact that fades rather
+    // than a state that switches off.
+    const sinceDrop = scoreSec - (this.dropSec ?? -Infinity);
+    this.dropHit = moment === 'drop' && sinceDrop >= 0
+      ? Math.exp(-sinceDrop / 1.5)
+      : 0;
+
     if (this.lastCutBar === undefined) this.lastCutBar = -Infinity;
     const held = barIndex - this.lastCutBar;
     const due = held >= barsPerCut(moment, rawEnergy);
@@ -2569,10 +2596,12 @@ export class StickMenVisual {
   }
 
   /**
-   * Choose a camera setup for a section.
+   * Choose a camera setup and a subject for the moment the track is in.
    *
-   * The shot is only a *destination*; the camera eases toward it, so sections
-   * flow into each other rather than cutting.
+   * The shot is a destination the camera *snaps* to - it sets `pendingCut`, and
+   * `updateCamera` jumps rather than eases. Easing between two setups is a move,
+   * and a move turns every edit into a swoop; the drift within a shot still
+   * eases, so an angle is alive the moment it lands.
    */
   pickShot(moment, seed) {
     const names = SHOT_PLAN[moment] ?? SHOT_PLAN.build;
@@ -2586,9 +2615,20 @@ export class StickMenVisual {
       name = names[Math.abs(seed + 1) % names.length];
     }
     this.shot = SHOTS.find((candidate) => candidate.name === name) ?? SHOTS[0];
-    this.shotTarget = this.shot.target === 'pick'
-      ? Math.abs(seed * 7 + 3) % Math.max(1, this.dancers.length)
-      : null;
+    // Who the shot is on. Dancer 0 is the lead - `moveForDancer` gives it the
+    // vocal and the expressive move, and everyone else a companion move - so a
+    // close shot on a random backing figure is a close shot on the person not
+    // carrying the moment. It used to pick uniformly, which on a five-piece
+    // cast meant the lead was the subject of one close shot in five.
+    //
+    // Not always the lead either: a chorus that never looks at anyone else has
+    // no cast, only a soloist with scenery. One cut in four goes to a backing
+    // figure, and every cut during a drop goes to the lead.
+    const cast = Math.max(1, this.dancers.length);
+    if (this.shot.target !== 'pick') this.shotTarget = null;
+    else if (moment === 'drop' || cast === 1) this.shotTarget = 0;
+    else if (Math.abs(seed) % 4 === 0) this.shotTarget = 1 + (Math.abs(seed * 7) % (cast - 1));
+    else this.shotTarget = 0;
     // Snap on the next camera update rather than easing across the room.
     this.pendingCut = true;
   }
@@ -3575,7 +3615,10 @@ export class StickMenVisual {
     // The canon term collapses to zero at both ends of a phrase, so the cast
     // lands together on structural beats and ripples only in between. Added to
     // the permanent per-figure jitter rather than replacing it.
-    const offset = dancer.beatOffset + dancer.canon * spread;
+    // A drop collapses the canon: the ripple that makes a phrase feel loose is
+    // exactly wrong at the moment the whole room is supposed to hit together.
+    const together = 1 - Math.min(1, this.dropHit ?? 0);
+    const offset = dancer.beatOffset * together + dancer.canon * spread * together;
     const dancerBeat = beatCount + offset;
     const bar = (dancerBeat / meter) % 1;
     const beat = dancerBeat % 1;
@@ -3588,7 +3631,15 @@ export class StickMenVisual {
     }
     const connecting = dancer.transitionBeats > 0;
 
-    const moveName = connecting ? dancer.connector : (dancer.move ?? this.move);
+    // Unison through a drop. Companion moves are what stops a cast reading as
+    // clones for the other ninety percent of a track, but a drop is the one
+    // moment everybody does the same thing, and the phrase system cannot
+    // express that on its own - it assigns moves at phrase boundaries, and a
+    // drop lands where it lands.
+    const unison = (this.dropHit ?? 0) > 0.25;
+    const moveName = connecting && !unison
+      ? dancer.connector
+      : (unison ? this.move : (dancer.move ?? this.move));
     // Falls through to a real move rather than undefined. Both earlier terms can
     // miss at once - they were the same bad name in the `sway` crash - and an
     // undefined here throws, which costs the whole visualisation for the session.
@@ -3600,7 +3651,11 @@ export class StickMenVisual {
     if (moveName !== 'jump' && moveName !== 'reach' && moveName !== 'idle') {
       const weight = Math.sin(dancerBeat * Math.PI);
       const downbeat = attack(beat);
-      const groove = 0.55 + this.energy * 0.65;
+      // The drop drives the whole group deeper into the floor on every
+      // downbeat. Same term as the ordinary groove compression, scaled up -
+      // a separate accent on top read as a twitch laid over the dance rather
+      // than as the dance being bigger.
+      const groove = (0.55 + this.energy * 0.65) * (1 + (this.dropHit ?? 0) * 0.8);
       target.bob -= downbeat * 0.045 * groove;
       target.sway += weight * 0.055 * groove;
       target.spineTwist -= weight * 5 * DEG * groove;

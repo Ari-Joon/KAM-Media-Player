@@ -5,12 +5,20 @@ import { StickMenVisual, PHRASE_BARS, moveForSection, SHOTS, SHOT_PLAN } from '.
 // is unnecessary here because the regression is choreography state, but every
 // drawing method remains present so the test exercises a complete render frame.
 const gradient = { addColorStop() {} };
-const context = {
-  arc() {}, beginPath() {}, closePath() {}, ellipse() {}, fill() {}, fillRect() {},
-  lineTo() {}, moveTo() {}, restore() {}, save() {}, stroke() {},
-  createLinearGradient: () => gradient,
-  createRadialGradient: () => gradient,
-};
+// Answers to *any* canvas method, rather than the handful the renderer happened
+// to use when this was written. The explicit list missed `strokeRect`, which
+// `drawProps` calls for crates - so a whole prop layer could throw in Discord
+// while the suite stayed green, and only did not because the props that section
+// chose were the ones already covered.
+const context = new Proxy({}, {
+  get: (target, key) => {
+    if (key in target) return target[key];
+    if (key === 'createLinearGradient' || key === 'createRadialGradient') return () => gradient;
+    if (key === 'measureText') return () => ({ width: 10 });
+    return () => {};
+  },
+  set: (target, key, value) => { target[key] = value; return true; },
+});
 const canvas = {
   clientWidth: 960,
   clientHeight: 540,
@@ -596,6 +604,60 @@ const unreachable = NAMED_DANCES.filter((name) => !reachable.has(name));
 assert.equal(unreachable.length, 0,
   `these dances can never be chosen: ${unreachable.join(', ')}`);
 
+// A drop must reach the cast, not only the camera. Everybody hits together, so
+// the spread of the figures' vertical offsets should fall sharply while the
+// drop accent is live.
+//
+// What this covers is the unison move assignment, which is nearly all of the
+// effect: measured over a real track, spread went 0.0189 outside a drop to
+// 0.0044 with unison alone. The canon collapse on top takes it to 0.0036 - an
+// 18% further tightening that this assertion does *not* isolate, confirmed by
+// removing that line and watching the test still pass. Do not read a green run
+// here as proof the canon term works.
+{
+  const dropFrames = 3000;
+  const dropScore = {
+    analysis: { is_partial: false, analysed_duration_sec: 100 },
+    timing: { tempo_bpm: 120, meter: 4, beats: [0] },
+    lanes: {
+      fps: 30,
+      frame_count: dropFrames,
+      // Quiet for 20s, then loud - which is what `momentFor` reads as a drop.
+      energy: Array.from({ length: dropFrames }, (_, i) => (i < 600 ? 0.20 : 0.95)),
+      punch: Array.from({ length: dropFrames }, (_, i) => (i < 600 ? 0.15 : 0.90)),
+    },
+    sections: [
+      { index: 0, start_sec: 0, end_sec: 20, energy_mean: 0.20, brightness_mean: 0.4 },
+      { index: 1, start_sec: 20, end_sec: 100, energy_mean: 0.95, brightness_mean: 0.6 },
+    ],
+    choreography: { sections: [{ routine: ['step'] }, { routine: ['jump'] }] },
+  };
+
+  const dropVisual = new StickMenVisual(canvas);
+  dropVisual.setTrack({ providerId: 't', title: 't', thumbnail: null, performerCount: 5 });
+
+  const spreadNow = () => {
+    const bobs = dropVisual.dancers.map((dancer) => dancer.pose?.bob ?? 0);
+    const mean = bobs.reduce((a, b) => a + b, 0) / bobs.length;
+    return Math.sqrt(bobs.reduce((a, b) => a + (b - mean) ** 2, 0) / bobs.length);
+  };
+
+  const during = [];
+  const after = [];
+  for (let t = 0; t < 40; t += 1 / 60) {
+    fakeNow += 1000 / 60;
+    dropVisual.render(dropScore, t);
+    if (dropVisual.dropHit > 0.25) during.push(spreadNow());
+    else if (t > 30) after.push(spreadNow());
+  }
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+
+  assert.ok(during.length > 30, `the drop was never detected (${during.length} frames)`);
+  assert.ok(mean(during) < mean(after) * 0.5,
+    `the cast did not converge on the drop: spread ${mean(during).toFixed(4)} during `
+    + `against ${mean(after).toFixed(4)} after`);
+}
+
 // Every shot named in the plan must resolve to a real setup. `pickShot` falls
 // back to `SHOTS[0]` on a miss, so renaming a shot without updating the plan
 // does not throw - it silently pins that whole moment to the wide, and the only
@@ -622,4 +684,4 @@ for (const shot of SHOTS) {
 }
 
 performance.now = realNow;
-console.log('StickMenVisual: 58/58 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging)');
+console.log('StickMenVisual: 60/60 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops)');
