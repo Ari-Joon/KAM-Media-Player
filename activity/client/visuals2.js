@@ -298,6 +298,52 @@ export class TerrainVisual extends Canvas2DVisual {
     this.rows = [];
     this.sinceRow = 0;
     this.offset = 0;
+    /** Playback position at the previous frame, for detecting a seek. */
+    this.lastSec = null;
+  }
+
+  /**
+   * Fill the height history from the track's past.
+   *
+   * The landscape is a scrolling record of what has already been heard, laid
+   * down one row at a time at two to five rows a second. Starting that record
+   * empty and padding it with zeroes meant selecting Terrain part-way through a
+   * track gave a flat plain, and roughly ten seconds of nothing happening while
+   * thirty-four rows filled in - which reads as the visualisation being broken
+   * rather than as it beginning.
+   *
+   * None of that waiting is necessary: a VisualScore is time-addressable, so the
+   * past is simply there to be read. Each row is the spectrum at the moment it
+   * would have been emitted, which also means the landscape you see is the same
+   * one you would have got had you been watching all along - and the same one
+   * everybody else in the channel sees.
+   *
+   * @param {object} score
+   * @param {number} scoreSec Position to build backwards from.
+   * @param {number} rowsPerSecond Emission rate, so rows land where they would.
+   * @param {number} rows How many to build.
+   * @param {number} columns Grid width.
+   * @param {number} bands Spectrum band count.
+   */
+  primeRows(score, scoreSec, rowsPerSecond, rows, columns, bands) {
+    const lanes = score.lanes;
+    const built = [];
+    for (let r = 0; r < rows; r++) {
+      // Row 0 is nearest the camera and therefore the most recent.
+      const at = Math.max(0, scoreSec - r / rowsPerSecond);
+      const frame = Math.max(0, Math.min(
+        Math.floor(at * lanes.fps), lanes.frame_count - 1,
+      ));
+      const row = [];
+      for (let c = 0; c <= columns; c++) {
+        const across = Math.abs((c / columns) * 2 - 1);
+        const band = Math.min(bands - 1, Math.floor(across * bands));
+        row.push(lanes.spectrum[band]?.[frame] ?? 0);
+      }
+      built.push(row);
+    }
+    this.rows = built;
+    this.offset = 0;
   }
 
   render(score, playbackSec) {
@@ -330,6 +376,17 @@ export class TerrainVisual extends Canvas2DVisual {
 
     // Scroll continuously and emit a row whenever a full cell has passed.
     const rowsPerSecond = 2.2 + lanes.energy * 2.6;
+
+    // Built from the score's past on the first frame, and again after a seek -
+    // where the history on screen belongs to a part of the track nobody is
+    // listening to any more. A second and a half is comfortably longer than any
+    // ordinary frame and far shorter than the shortest deliberate jump.
+    const sec = this.lanes.scoreSec;
+    if (this.rows.length === 0 || Math.abs(sec - (this.lastSec ?? sec)) > 1.5) {
+      this.primeRows(score, sec, rowsPerSecond, ROWS, COLUMNS, bands);
+    }
+    this.lastSec = sec;
+
     this.offset += deltaSec * rowsPerSecond;
     while (this.offset >= 1) {
       this.offset -= 1;
@@ -344,6 +401,9 @@ export class TerrainVisual extends Canvas2DVisual {
       this.rows.unshift(row);
       if (this.rows.length > ROWS) this.rows.pop();
     }
+    // A backstop only. Priming above fills the history, so this should never
+    // have anything to do - it exists so a score with an unreadable spectrum
+    // draws flat ground rather than throwing on a missing row.
     while (this.rows.length < ROWS) this.rows.push(new Array(COLUMNS + 1).fill(0));
 
     // Perspective projection of a ground-plane vertex.

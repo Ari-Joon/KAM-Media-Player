@@ -104,8 +104,14 @@ const score = {
     bass: lane((i) => 0.4 + 0.3 * Math.sin(i / 17)),
     mid: lane((i) => 0.4 + 0.2 * Math.sin(i / 19)),
     treble: lane((i) => 0.3 + 0.2 * Math.sin(i / 13)),
-    spectrum: lane((i) => Array.from({ length: 16 },
-      (_, b) => 0.2 + 0.5 * Math.abs(Math.sin((i + b * 9) / 21)))),
+    // Band-major, matching a real score: sixteen bands, each a dense lane over
+    // every frame. This was frame-major - an array of frames each holding
+    // sixteen values - which is the transpose, and nothing caught it because
+    // `LaneReader` reads `spectrum[band][frame]` and simply found `undefined`.
+    // Every visualisation in this file was therefore being tested against a
+    // spectrum of 1800 bands whose levels were almost all zero.
+    spectrum: Array.from({ length: 16 }, (_, b) =>
+      lane((i) => 0.2 + 0.5 * Math.abs(Math.sin((i + b * 9) / 21)))),
   },
   // Many short sections rather than two long ones.
   //
@@ -345,4 +351,23 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
   // alignment could not be forced here - the arithmetic was confirmed instead
   // (minimum lit -0.110, which floors to bucket -1) and the fix is a clamp.
   console.log('pulse: 1/1 pass (survives a loud wave-free passage)');
+}
+
+// --- Terrain must not start on flat ground ----------------------------------
+// The landscape is a scrolling record of what has already been heard, emitted
+// at two to five rows a second. Starting that record empty and padding it with
+// zeroes meant selecting Terrain part-way through a track gave a flat plain and
+// about ten seconds of nothing while thirty-four rows filled. A VisualScore is
+// time-addressable, so the history is simply read from the track's past.
+{
+  const context = recordingContext();
+  const visual = new TerrainVisual(canvasWith(context));
+  // One frame, well into the track - the case that used to start empty.
+  visual.render(score, 30, 30);
+
+  const flat = visual.rows.filter((row) => row.every((height) => height === 0));
+  assert.ok(visual.rows.length > 0, 'Terrain built no rows at all');
+  assert.equal(flat.length, 0,
+    `Terrain started with ${flat.length} of ${visual.rows.length} rows flat`);
+  console.log('terrain priming: 2/2 pass (the landscape is populated on the first frame)');
 }
