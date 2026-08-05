@@ -49,6 +49,8 @@ export class PlaylistPanel {
    */
   constructor(context) {
     this.context = context;
+    /** Whose panel this is, for matching own cards to queue blocks. */
+    this.viewerId = context.viewerId ?? null;
     this.panel = document.getElementById('playlist-panel');
     this.mine = document.getElementById('playlist-mine');
     this.others = document.getElementById('playlist-others');
@@ -66,6 +68,14 @@ export class PlaylistPanel {
      * The whole set is already in hand, so there is nothing to fetch.
      */
     this.view = { query: '', owner: '' };
+
+    /**
+     * Play order of each playlist currently in the queue, keyed `ownerId:slot`
+     * - the same key the server stamps onto a queued track.
+     *
+     * @type {Map<string, number>}
+     */
+    this.queued = new Map();
 
     this.searchBox?.addEventListener('input', () => {
       this.view.query = this.searchBox.value.trim().toLowerCase();
@@ -200,6 +210,36 @@ export class PlaylistPanel {
     );
   }
 
+  /**
+   * The key the server uses for a playlist block in the queue.
+   *
+   * Another member's card carries their id; the viewer's own two carry no user
+   * object at all, so `null` stands for "me" and is filled in by the panel's
+   * own knowledge of whose playlists those are.
+   *
+   * @param {object} entry
+   * @returns {string}
+   */
+  keyFor(entry) {
+    const owner = entry.user?.id ?? this.viewerId ?? 'me';
+    return `${owner}:${entry.slot ?? entry.visibility}`;
+  }
+
+  /**
+   * Told by the transport which playlists are in the queue, and in what order.
+   *
+   * @param {Map<string, number>} order
+   */
+  setQueued(order) {
+    const changed = order.size !== this.queued.size
+      || [...order].some(([key, place]) => this.queued.get(key) !== place);
+    this.queued = order;
+    // Only redraw when it actually changed: this arrives with every snapshot,
+    // about twice a second, and rebuilding the panel that often would fight
+    // anyone typing in the search box.
+    if (changed && !this.panel?.hidden) this.render();
+  }
+
   /** Whether one track matches the current search. */
   matches(track) {
     if (!this.view.query) return true;
@@ -299,6 +339,19 @@ export class PlaylistPanel {
     badge.textContent = isPrivate ? '\u{1F512} Private' : 'Public';
     top.append(badge);
 
+    // Where this playlist sits in the queue, when it is in the queue at all.
+    // Queueing playlists in the order you want them *is* the ordering, so this
+    // is a readout of what you have already done rather than a control.
+    const place = this.queued.get(this.keyFor(entry));
+    if (place) {
+      const order = document.createElement('span');
+      order.className = 'play-order';
+      order.textContent = String(place);
+      order.title = `Playing ${place === 1 ? 'first' : `${place}${place === 2 ? 'nd' : place === 3 ? 'rd' : 'th'}`} in the queue`;
+      card.classList.add('is-queued');
+      top.append(order);
+    }
+
     const name = document.createElement('input');
     name.className = 'playlist-name';
     name.value = entry.name;
@@ -362,12 +415,14 @@ export class PlaylistPanel {
       queueAll.addEventListener('click', async (event) => {
         event.stopPropagation();
         queueAll.disabled = true;
-        // What is on screen, not the whole playlist: with a search running, the
-        // visible rows are what "all" means to whoever is looking at it.
-        const wanted = entry.tracks.filter((track) => this.matches(track));
         try {
-          await this.context.enqueueMany(wanted);
-          this.context.notify(`Queued ${wanted.length} from ${entry.name}.`);
+          // The playlist is named, not sent. The server reads its own copy and
+          // stamps each track with where it came from, so the queue can group
+          // them - and so the label on a block cannot be anything a client
+          // decided to claim.
+          await this.context.enqueuePlaylist({
+            ownerId: entry.user?.id ?? null, slot: entry.slot ?? 'public', name: entry.name,
+          });
         } finally {
           queueAll.disabled = false;
         }

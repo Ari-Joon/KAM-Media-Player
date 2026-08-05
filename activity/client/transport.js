@@ -160,6 +160,16 @@ export class Transport {
     this.queueSelection = new Set();
     /** Last row touched, so shift-click has something to extend from. */
     this.queueAnchor = null;
+    /**
+     * Playlist blocks the viewer has opened out in the queue.
+     *
+     * Client state, like the visualisation choice: two people looking at the
+     * same queue can have different blocks expanded, and neither should move
+     * the other's panel.
+     *
+     * @type {Set<string>}
+     */
+    this.expandedGroups = new Set();
     /** Row index anchoring a shift-click range. */
     this.favAnchor = null;
     /** How many tracks the in-flight drag carries, shown on the indicator. */
@@ -275,6 +285,8 @@ export class Transport {
       authHeaders: () => this.authHeaders(),
       enqueue: (track) => this.addToQueue(track).catch((error) => notify(error.message)),
       enqueueMany: (tracks) => this.addManyToQueue(tracks).catch((error) => notify(error.message)),
+      enqueuePlaylist: (which) => this.queuePlaylist(which).catch((error) => notify(error.message)),
+      viewerId: this.user?.id ?? null,
       notify,
     });
 
@@ -787,7 +799,11 @@ export class Transport {
     const list = this.elements.list;
     const listTop = list.getBoundingClientRect().top;
     this.dropRows = [...list.children]
-      .filter((row) => !row.classList.contains('empty'))
+      // Only real track rows. A playlist heading and a "3 more" expander are
+      // list items too, and counting them would shift every gap after the
+      // first block - `positionForSlot` maps a gap index straight onto
+      // `queuePositions`, which holds tracks and nothing else.
+      .filter((row) => row.classList.contains('track'))
       .map((row) => {
         const bounds = row.getBoundingClientRect();
         return {
@@ -1105,6 +1121,35 @@ export class Transport {
     this.update(state);
     this.onState?.(state);
     this.queueSignature = null;
+  }
+
+  /**
+   * Queue a whole playlist as one block.
+   *
+   * Sends which playlist, never its contents. The server reads its own copy,
+   * so the tracks are the ones it has and the label stamped on them is the one
+   * it holds - a client cannot caption a block with somebody else's playlist
+   * name, or slip a track into a block it does not belong to.
+   *
+   * @param {{ownerId: string|null, slot: string, name: string}} which
+   */
+  async queuePlaylist(which) {
+    const response = await fetch(`/api/queue/${this.channelId}`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        playlist: { ownerId: which.ownerId ?? this.user?.id ?? null, slot: which.slot },
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error ?? 'Could not queue that playlist.');
+    }
+    const state = await response.json();
+    this.queueSignature = null;
+    this.update(state);
+    this.onState?.(state);
+    this.notify?.(`Queued ${which.name}.`);
   }
 
   /**
@@ -1646,7 +1691,12 @@ export class Transport {
     // same length, so a position-only signature never changed and the panel
     // silently failed to redraw.
     const signature = `${this.viewIndex}:${queue.total}:${queue.index}:`
-      + queue.upcoming.map((track) => `${track.position}|${track.providerId}`).join(',');
+      + queue.upcoming.map(
+        (track) => `${track.position}|${track.providerId}|${track.source?.id ?? ''}`,
+      ).join(',')
+      // Selection is part of what is drawn, so a selection change has to be a
+      // signature change or the highlight only appears on the next poll.
+      + `#${[...this.queueSelection].sort((a, b) => a - b).join('.')}`;
     if (signature === this.queueSignature) return;
     this.queueSignature = signature;
 
@@ -1657,7 +1707,6 @@ export class Transport {
     // progress describes elements that no longer exist. Absolute positions are
     // republished for the same reason: a drop maps a gap to one of these.
     this.dropRows = null;
-    this.queuePositions = queue.upcoming.map((track) => track.position);
 
     if (queue.upcoming.length === 0) {
       const empty = document.createElement('li');
@@ -1667,8 +1716,126 @@ export class Transport {
       return;
     }
 
-    queue.upcoming.forEach((track, index) => {
+    // --- Grouping ----------------------------------------------------------
+    //
+    // Consecutive tracks sharing a source are one block with a heading, so a
+    // queue full of playlists reads as playlists rather than as forty
+    // unexplained songs. Runs are computed from the tracks themselves rather
+    // than held as ranges: the queue is reordered, shuffled and removed from
+    // constantly, and a range would be wrong the moment anything moved.
+    //
+    // The rows stay direct children of the list, never nested inside a group
+    // element. The favourites drag measures `list.children` to decide which gap
+    // the pointer is in, so nesting would make each block read as a single row
+    // and drop tracks in the wrong place.
+    const blocks = [];
+    for (const track of queue.upcoming) {
+      const id = track.source?.id ?? null;
+      const last = blocks.at(-1);
+      if (last && last.id === id) last.tracks.push(track);
+      else blocks.push({ id, source: track.source ?? null, tracks: [track] });
+    }
+
+    // Play order, by first appearance. This is the number shown on the block
+    // and on the playlist card - clicking playlists in the order you want them
+    // *is* the ordering, so there is no separate thing to set.
+    const order = new Map();
+    for (const block of blocks) {
+      if (block.id && !order.has(block.id)) order.set(block.id, order.size + 1);
+    }
+    this.playlists?.setQueued(order);
+
+    // Rebuilt as rows are appended, because a collapsed block renders fewer
+    // rows than it has tracks and the drop arithmetic maps gaps to *rendered*
+    // rows. Taking this from `queue.upcoming` instead put every drop after a
+    // collapsed block into the wrong slot.
+    this.queuePositions = [];
+    let index = 0;
+
+    for (const block of blocks) {
+      if (block.source) list.append(this.groupHead(block, order.get(block.id)));
+
+      // Three, then an expander. A nested scrolling area inside a 340px panel
+      // that is itself scrolling is unpleasant to use on a trackpad and worse
+      // on touch, so a long block collapses instead.
+      const expanded = this.expandedGroups.has(block.id);
+      const shown = block.source && !expanded ? block.tracks.slice(0, 3) : block.tracks;
+
+      for (const track of shown) {
+        list.append(this.queueRow(track, index, queue));
+        this.queuePositions.push(track.position);
+        index += 1;
+      }
+
+      const hidden = block.tracks.length - shown.length;
+      if (hidden > 0 || (block.source && expanded && block.tracks.length > 3)) {
+        const more = document.createElement('li');
+        more.className = 'group-more';
+        more.textContent = hidden > 0 ? `${hidden} more…` : 'Show fewer';
+        more.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (expanded) this.expandedGroups.delete(block.id);
+          else this.expandedGroups.add(block.id);
+          this.queueSignature = null;
+          if (this.lastDecks) this.renderDecks(this.lastDecks);
+        });
+        list.append(more);
+      }
+    }
+
+    this.updateQueueSelectionBar();
+  }
+
+  /**
+   * The heading above a run of tracks from one playlist.
+   *
+   * @param {{source: object, tracks: object[]}} block
+   * @param {number} position Where this playlist sits in the play order.
+   */
+  groupHead(block, position) {
+    const head = document.createElement('li');
+    head.className = 'group-head';
+
+    const badge = document.createElement('span');
+    badge.className = 'group-number';
+    badge.textContent = String(position);
+    badge.title = `Playlist ${position} in the queue`;
+
+    const name = document.createElement('span');
+    name.className = 'group-name';
+    name.textContent = block.source.name;
+
+    const who = document.createElement('span');
+    who.className = 'group-owner';
+    // A private playlist can only be your own, so naming its owner would be
+    // saying "you" at length.
+    who.textContent = block.source.visibility === 'private'
+      ? 'your private playlist'
+      : block.source.ownerName;
+
+    const count = document.createElement('span');
+    count.className = 'group-count';
+    count.textContent = String(block.tracks.length);
+
+    head.append(badge, name, who, count);
+    head.title = `${block.tracks.length} tracks from ${block.source.name}`;
+    return head;
+  }
+
+  /**
+   * One queue row.
+   *
+   * @param {object} track
+   * @param {number} index Display index among rendered rows.
+   * @param {object} queue
+   * @returns {HTMLElement}
+   */
+  queueRow(track, index, queue) {
+    {
       const item = document.createElement('li');
+      // Marks this as a real track row, which is what the drop measurement
+      // counts and what tells it apart from a heading or an expander.
+      item.className = 'track';
 
       const number = document.createElement('span');
       number.className = 'num';
@@ -1721,7 +1888,6 @@ export class Transport {
       item.append(number, name, time, tools);
       item.title = `Play ${track.title}`;
       item.dataset.menuTrack = menuTrack(track);
-      // Absolute position from the server, not the display index, so it stays
       // Multi-select, so a queue can be cleared out in one go rather than one
       // row at a time. Ctrl toggles, shift extends from the last row touched -
       // the same gestures the favourites panel uses, and the same ones every
@@ -1773,10 +1939,8 @@ export class Transport {
         this.queueAnchor = track.position;
         this.send('jumpDeck', { deck: this.viewIndex, position: track.position });
       });
-      list.append(item);
-    });
-
-    this.updateQueueSelectionBar();
+      return item;
+    }
   }
 
   /**

@@ -1405,6 +1405,97 @@
 
   #queue-list .by { color: var(--trace-dim); font-size: 9px; }
 
+  /* --- Playlist blocks in the queue -------------------------------------- */
+
+  #queue-list .group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 9px 6px 5px;
+    margin-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+  }
+
+  /* The connector. A block after the first is joined to the one above it, so a
+     queue of several playlists reads as a sequence rather than as a list that
+     happens to have headings in it. */
+  #queue-list .group-head:not(:first-child) {
+    border-top-color: rgba(255, 210, 26, 0.28);
+  }
+
+  #queue-list .group-number {
+    flex: none;
+    display: inline-grid;
+    place-content: center;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 5px;
+    background: rgba(255, 210, 26, 0.85);
+    color: #1a1608;
+    font-family: var(--ui-font);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  #queue-list .group-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  #queue-list .group-owner {
+    flex: none;
+    color: var(--trace-dim);
+    font-size: 10px;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #queue-list .group-count {
+    flex: none;
+    color: var(--trace-dim);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Three rows then this, rather than a scrolling area inside the block: a
+     nested scroller in a 340px panel that is itself scrolling is unpleasant on
+     a trackpad and worse on touch. */
+  #queue-list .group-more {
+    padding: 4px 6px 8px 30px;
+    color: var(--trace);
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+
+  #queue-list .group-more:hover { color: #ffd21a; background: rgba(255, 255, 255, 0.05); }
+
+  #playlist-panel .playlist.is-queued { border-color: rgba(255, 210, 26, 0.55); }
+
+  #playlist-panel .play-order {
+    flex: none;
+    display: inline-grid;
+    place-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 5px;
+    background: rgba(255, 210, 26, 0.85);
+    color: #1a1608;
+    font-family: var(--ui-font);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
   /* Positioned so the insertion indicator can be offset against the list
      rather than the panel, which keeps it correct however far the panel is
      scrolled. */

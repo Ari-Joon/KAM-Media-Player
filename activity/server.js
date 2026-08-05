@@ -1623,7 +1623,7 @@ function resolveKnownTrack(guildId, wanted) {
 
 app.post('/api/queue/:channelId', rateLimit(30, 60_000), async (request, response) => {
   const { channelId } = request.params;
-  const { track, tracks, deck: deckRef, at } = request.body ?? {};
+  const { track, tracks, deck: deckRef, at, playlist } = request.body ?? {};
 
   // Accepts either one track or a batch.
   //
@@ -1635,7 +1635,14 @@ app.post('/api/queue/:channelId', rateLimit(30, 60_000), async (request, respons
   const asked = (Array.isArray(tracks) ? tracks : [track])
     .filter((entry) => entry?.provider && entry?.providerId);
 
-  if (asked.length === 0) return response.status(400).json({ error: 'No track given.' });
+  // A playlist is named, not sent. The caller says whose playlist and which
+  // slot; the tracks and the name come from the server's own store. Sending the
+  // tracks would work equally well for queueing them, but the *label* stamped
+  // on each one would then be whatever the client claimed - so anybody could
+  // fill a room's queue with tracks captioned as somebody else's playlist.
+  if (asked.length === 0 && !playlist) {
+    return response.status(400).json({ error: 'No track given.' });
+  }
   if (asked.length > MAX_QUEUE_BATCH) {
     return response.status(413).json({ error: `At most ${MAX_QUEUE_BATCH} tracks at once.` });
   }
@@ -1652,11 +1659,48 @@ app.post('/api/queue/:channelId', rateLimit(30, 60_000), async (request, respons
     const user = await authorise(request, { voiceChannel: channel });
 
     // Identity in, descriptor out. Nothing the caller sent is played.
-    const batch = asked.map((entry) => resolveKnownTrack(channel.guild.id, entry));
-    if (batch.some((entry) => !entry)) {
-      return response.status(400).json({
-        error: 'Those tracks are no longer available. Search for them again.',
-      });
+    let batch;
+    /** Stamped on every track from a playlist, so the queue can group them. */
+    let source = null;
+
+    if (playlist) {
+      const ownerId = String(playlist.ownerId ?? user.id);
+      const slot = playlist.slot;
+      if (!SLOTS.includes(slot)) {
+        return response.status(400).json({ error: 'No such playlist.' });
+      }
+      // Somebody else's private playlist is not queueable by naming it. The
+      // read endpoint never discloses one, but "never sent" and "refused when
+      // asked for directly" are different guarantees, and this is the one that
+      // holds even if the first is ever weakened.
+      if (slot === 'private' && ownerId !== user.id) {
+        return response.status(403).json({ error: 'That playlist is private.' });
+      }
+      const record = playlists.get(channel.guild.id, ownerId);
+      const chosen = record?.[slot];
+      if (!chosen || chosen.tracks.length === 0) {
+        return response.status(400).json({ error: 'That playlist is empty.' });
+      }
+      if (chosen.tracks.length > MAX_QUEUE_BATCH) {
+        return response.status(413).json({ error: `At most ${MAX_QUEUE_BATCH} tracks at once.` });
+      }
+      batch = chosen.tracks.map(({ savedAt, ...entry }) => entry);
+      source = {
+        // Identifies the block, and changes if the playlist is renamed - which
+        // is right: a rename mid-queue should not merge two different blocks.
+        id: `${ownerId}:${slot}`,
+        name: chosen.name,
+        ownerId,
+        ownerName: record.user?.username ?? 'someone',
+        visibility: slot,
+      };
+    } else {
+      batch = asked.map((entry) => resolveKnownTrack(channel.guild.id, entry));
+      if (batch.some((entry) => !entry)) {
+        return response.status(400).json({
+          error: 'Those tracks are no longer available. Search for them again.',
+        });
+      }
     }
 
     const target = preparePlayer(player ?? getPlayer(channel.guild.id));
@@ -1668,7 +1712,11 @@ app.post('/api/queue/:channelId', rateLimit(30, 60_000), async (request, respons
     const deck = target.decks.resolve(deckRef ?? null);
     if (!deck) return response.status(400).json({ error: 'No such playlist.' });
 
-    const prepared = batch.map((entry) => ({ ...entry, addedBy: user?.username ?? null }));
+    const prepared = batch.map((entry) => ({
+      ...entry,
+      addedBy: user?.username ?? null,
+      ...(source ? { source } : {}),
+    }));
 
     // Whether the player was idle is read once, before anything is added. Asking
     // after the first track would report a queue that is no longer empty, so a

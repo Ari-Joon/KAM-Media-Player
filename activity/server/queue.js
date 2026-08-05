@@ -322,6 +322,12 @@ export class Queue {
         provider: track.provider,
         thumbnail: track.thumbnail ?? null,
         addedBy: track.addedBy ?? null,
+        // Where this track came from, when it came from a playlist. Carried per
+        // track rather than as a separate list of ranges because the queue is
+        // reordered, shuffled and removed from constantly - a range would have
+        // to be maintained through every one of those, and would be wrong the
+        // moment anything moved. A field on the track is simply always right.
+        source: track.source ?? null,
       })),
     };
   }
