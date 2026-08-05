@@ -40,6 +40,15 @@ import { DeckSet } from './decks.js';
 /** @type {Map<string, GuildPlayer>} */
 const players = new Map();
 
+/**
+ * How many recently played tracks to remember per player.
+ *
+ * Seven, because the panel that shows them is a convenience under the search
+ * box rather than a history: enough to cover a session's worth of "what was
+ * that one", short enough that it never becomes a list to scroll.
+ */
+const RECENT_TRACKS = 7;
+
 export class GuildPlayer {
   /** @param {string} guildId */
   constructor(guildId) {
@@ -175,6 +184,7 @@ export class GuildPlayer {
     const track = this.queue.current();
     if (!track) return null;
 
+    this.rememberPlayed(track);
     this.releaseAudio();
     this.score = null;
     this.seekOffsetSec = 0;
@@ -404,7 +414,41 @@ export class GuildPlayer {
       paused: this.isPaused(),
       queue: this.queue.toJSON(),
       decks: this.decks.toJSON(),
+      recent: this.recent ?? [],
     };
+  }
+
+  /**
+   * Keep the last few tracks that actually started playing.
+   *
+   * So a song can be found again without retyping it - the case being someone
+   * who has just heard something, did not favourite it at the time, and now
+   * wants it in a playlist. Recorded at the point audio starts rather than when
+   * a track is queued, because a queued track that was skipped past was never
+   * really heard and is not what anyone is looking for.
+   *
+   * Held in memory only. It is a convenience for the current session, not a
+   * listening history, and writing one to disk would turn a small feature into
+   * a record of what a room plays.
+   *
+   * @param {object} track
+   */
+  rememberPlayed(track) {
+    if (!this.recent) this.recent = [];
+    const key = `${track.provider}:${track.providerId}`;
+    // Replaying something moves it to the front rather than duplicating it.
+    this.recent = this.recent.filter(
+      (entry) => `${entry.provider}:${entry.providerId}` !== key,
+    );
+    this.recent.unshift({
+      provider: track.provider,
+      providerId: track.providerId,
+      title: track.title,
+      artist: track.artist ?? null,
+      durationSec: track.durationSec ?? 0,
+      thumbnail: track.thumbnail ?? null,
+    });
+    if (this.recent.length > RECENT_TRACKS) this.recent.length = RECENT_TRACKS;
   }
 }
 

@@ -12,10 +12,14 @@ Guidance for Claude Code working in this repository.
   `activity/server/analyser.js`. Produces a **VisualScore** JSON document —
   the single contract between analysis and rendering, defined in
   `visualcore/src/visualcore/schema.py`.
-- **`activity/client/`** — vanilla JS, no framework. 21 visualisations plus a
-  "None" entry, registered in `client/main.js` (`VISUALS`). Implementations
-  live in `visuals.js`, `visuals2.js`, `stickmen.js`, `painter.js`,
-  `visualizer.js` (the only WebGL one).
+- **`activity/client/`** — vanilla JS, no framework. 17 visualisations plus a
+  "None" entry, registered in `client/registry.js` (`VISUALS`). Implementations
+  live in `visuals.js`, `visuals2.js`, `stickmen.js` and `painter.js`. All of
+  them are Canvas2D: there is no WebGL path, and reintroducing one means
+  reintroducing the failure modes that removing it fixed.
+- `client/playlists.js` holds the playlists panel and the track context menu,
+  and `client/transport.js` everything else about the player UI. The two are
+  joined by a small context object rather than by reaching into each other.
 
 Platform: Windows 11, PowerShell.
 

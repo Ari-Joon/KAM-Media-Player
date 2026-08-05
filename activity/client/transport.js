@@ -232,13 +232,13 @@ export class Transport {
       favSearch: document.getElementById('fav-search'),
       favSearchClear: document.getElementById('fav-search-clear'),
       favFolders: document.getElementById('fav-folders'),
-      tabs: document.getElementById('deck-tabs'),
+      recentPanel: document.getElementById('recent-played'),
+      recentList: document.getElementById('recent-list'),
       queueSelectionBar: document.getElementById('queue-selection'),
       queueSelectionCount: document.getElementById('queue-selection-count'),
       queueRemoveSelected: document.getElementById('queue-remove-selected'),
       queueClearSelection: document.getElementById('queue-clear-selection'),
       deckShuffle: document.getElementById('deck-shuffle'),
-      deckPlay: document.getElementById('deck-play'),
     };
 
     /**
@@ -496,10 +496,7 @@ export class Transport {
       // Force a redraw: the reply arrives before the next poll, and watching the
       // list reorder is the point of shuffling with the panel open.
       this.queueSignature = null;
-      this.tabSignature = null;
     });
-    this.elements.deckPlay.addEventListener('click', () =>
-      this.send('switchDeck', this.viewIndex));
 
     // Presence, not activity, decides visibility: the bar appears when the
     // cursor enters the lower part of the frame and leaves shortly after it
@@ -598,11 +595,19 @@ export class Transport {
         // one here would only invite the belief that it means something.
         body: JSON.stringify({ action, value }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        // Said out loud, not swallowed. A refused control and a control that
+        // did nothing look identical from here, and this silence is exactly
+        // what made a stale server - one started before an action existed, so
+        // answering 400 "Unknown action" - look like a broken button.
+        const detail = await response.json().catch(() => ({}));
+        this.notify?.(detail.error ?? `The server refused that (${response.status}).`);
+        return;
+      }
       const state = await response.json();
       // Any control that can reorder must invalidate the cached signatures, or
       // the panel keeps showing the previous order.
-      if (['move', 'shuffle', 'shuffleDeck', 'removeTrack'].includes(action)) {
+      if (['move', 'shuffle', 'shuffleDeck', 'removeTrack', 'removeTracks'].includes(action)) {
         this.queueSignature = null;
       }
       this.update(state);
@@ -1561,48 +1566,72 @@ export class Transport {
 
     if (state.decks) this.renderDecks(state.decks);
     else this.renderQueue(queue);
+    this.renderRecent(state.recent);
   }
 
   /**
-   * Render the deck tabs and the queue of whichever deck is being viewed.
+   * Draw the recently played list under the search box.
+   *
+   * Only while the results list is empty. Someone who has just searched wants
+   * to see what they searched for, and a second list of tracks underneath it
+   * is one more thing to read past.
+   *
+   * @param {object[]} recent Newest first, from the server snapshot.
+   */
+  renderRecent(recent = []) {
+    const { recentPanel, recentList } = this.elements;
+    if (!recentPanel || !recentList) return;
+
+    const searching = this.elements.searchResults.childElementCount > 0;
+    recentPanel.hidden = searching || recent.length === 0;
+    if (recentPanel.hidden) return;
+
+    const signature = recent.map((track) => track.providerId).join(',');
+    if (signature === this.recentSignature) return;
+    this.recentSignature = signature;
+
+    recentList.textContent = '';
+    for (const track of recent) {
+      const row = document.createElement('li');
+
+      const title = document.createElement('span');
+      title.className = 'title';
+      title.textContent = track.artist ? `${track.artist} - ${track.title}` : track.title;
+      title.title = title.textContent;
+
+      const time = document.createElement('span');
+      time.className = 'time';
+      time.textContent = clock(track.durationSec);
+
+      row.append(title, time);
+      row.title = `Queue ${track.title}`;
+      // The same right-click menu as everywhere else, which is the point of the
+      // list: the usual reason to want a track you just heard is to save it.
+      row.dataset.menuTrack = menuTrack(track);
+      row.addEventListener('click', () => this.queueTrack(track));
+      recentList.append(row);
+    }
+  }
+
+  /**
+   * Render the queue.
+   *
+   * The deck tabs are gone. Decks are parallel queues the bot supports from
+   * chat, but in the Activity they surfaced as a row of buttons reading
+   * "Main 7" - a name nobody chose above a count nobody asked for - and the
+   * panel is the queue, not a place to manage several. The active deck is what
+   * is shown, which is what the room is listening to.
    *
    * @param {object} decks Serialised DeckSet.
    */
   renderDecks(decks) {
-    if (this.viewIndex >= decks.decks.length) this.viewIndex = decks.activeIndex;
+    this.viewIndex = decks.activeIndex;
     // Held so a selection change can repaint without waiting for the next
     // server snapshot, which is up to 600ms away and would make every click
     // feel broken.
     this.lastDecks = decks;
 
-    const signature = decks.decks
-      .map((deck) => `${deck.name}:${deck.total}:${deck.active}`).join('|')
-      + `#${this.viewIndex}`;
-    if (signature !== this.tabSignature) {
-      this.tabSignature = signature;
-      const tabs = this.elements.tabs;
-      tabs.textContent = '';
-      decks.decks.forEach((deck) => {
-        const button = document.createElement('button');
-        button.className = 'tab';
-        button.classList.toggle('viewing', deck.index === this.viewIndex);
-        // The playing deck is marked separately from the viewed one, so it is
-        // always obvious where the audio is coming from.
-        button.classList.toggle('playing', deck.active);
-        button.textContent = `${deck.name} ${deck.total}`;
-        button.title = deck.createdBy ? `Started by ${deck.createdBy}` : deck.name;
-        button.addEventListener('click', () => {
-          this.viewIndex = deck.index;
-          this.tabSignature = null;
-          this.queueSignature = null;
-          this.renderDecks(decks);
-        });
-        tabs.append(button);
-      });
-      this.elements.deckPlay.hidden = this.viewIndex === decks.activeIndex;
-    }
-
-    const viewed = decks.decks[this.viewIndex] ?? decks.decks[decks.activeIndex];
+    const viewed = decks.decks[decks.activeIndex] ?? decks.decks[0];
     if (viewed) this.renderQueue(viewed);
   }
 

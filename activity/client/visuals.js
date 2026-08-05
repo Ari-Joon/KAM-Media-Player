@@ -21,6 +21,8 @@
  * produce a believable EQ curve, and looked obviously fake.
  */
 
+import { resolveScoreTime } from './visualizer.js';
+
 /** Section palettes, shared so switching visualisation keeps the mood. */
 const PALETTES = [
   ['#ff1f6b', '#ffb02b'],
@@ -148,10 +150,12 @@ export class LaneReader {
    */
   sample(score, playbackSec, deltaSec) {
     const lanes = score.lanes;
-    const analysed = score.analysis.analysed_duration_sec;
-    const scoreSec = score.analysis.is_partial && playbackSec >= analysed && analysed > 0
-      ? playbackSec % analysed
-      : playbackSec;
+    // From `visualizer.js`, not reimplemented here. The wrap for a partial
+    // score existed in both places, and the copy with the tests against it was
+    // the one nothing called - so the rule every visualisation depends on was
+    // covered by nine assertions that could not have caught a change to the
+    // code actually running.
+    const scoreSec = resolveScoreTime(score, playbackSec);
     const frame = Math.max(0, Math.min(
       Math.floor(scoreSec * lanes.fps), lanes.frame_count - 1,
     ));

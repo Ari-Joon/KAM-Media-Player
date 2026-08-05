@@ -3,11 +3,11 @@
 KAM Media Player is a self-hosted Discord Activity and voice bot with queues,
 shared controls, and audio-reactive visuals. A Node/Express service runs the bot
 and Activity, while a persistent Python/librosa worker produces beat, section,
-energy, and spectrum data for twenty-one visualisations.
+energy, and spectrum data for seventeen visualisations.
 
 ## Release status
 
-Version 0.1.1 is a free, open-source **self-hosted alpha**. The source is ready
+Version 0.2.0 is a free, open-source **self-hosted alpha**. The source is ready
 to publish on GitHub for people to inspect, fork, improve, and run in their own
 Discord developer applications.
 
@@ -69,9 +69,12 @@ the need to keep PowerShell open; it does not remove the server.
 ## Highlights
 
 - Discord voice playback, queues, decks, favourites, and playlist imports
+- Personal playlists: two per member per server, one public and one private,
+  with a search across every playlist and a filter by member
+- Right-click any track to queue it, play it next, or save it to a playlist
 - Optional YouTube lookup plus SoundCloud lookup
 - Persistent analyser with tempo, beats, sections, energy, punch, and spectrum
-- Twenty-one canvas/WebGL visualisations, plus a "None" mode
+- Seventeen Canvas2D visualisations, plus a "None" mode
 - Stick figures with four-bar routines, formations, spring follow-through,
   beat-synchronised weight transfer, and artist-aware cast size
 - Docker, Fly.io, and Caddy deployment examples

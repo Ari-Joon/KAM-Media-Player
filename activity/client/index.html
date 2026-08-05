@@ -937,6 +937,31 @@
 
   #search-results li:hover { background: rgba(255, 255, 255, 0.08); }
 
+  /* Recently played borrows the search result row wholesale rather than
+     defining its own: the two lists do the same job and any difference between
+     them would be noise. */
+  #recent-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  #recent-list li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  #recent-list li:hover { background: rgba(255, 255, 255, 0.08); }
+  #recent-list .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #recent-list .time { color: var(--trace-dim); font-size: 11px; }
+  #recent-played[hidden] { display: none; }
+
   #search-results img {
     width: 44px;
     height: 44px;
@@ -1640,6 +1665,12 @@
            autocomplete="off" spellcheck="false">
     <p id="search-status" class="panel-note"></p>
     <ol id="search-results"></ol>
+    <!-- Shown only while there are no results on screen, so it never competes
+         with what was actually searched for. -->
+    <section id="recent-played" hidden>
+      <h3 class="playlist-heading">Recently played</h3>
+      <ol id="recent-list"></ol>
+    </section>
   </aside>
 
   <aside id="fav-panel" hidden>
@@ -1694,10 +1725,8 @@
   <aside id="queue-panel" hidden>
     <button id="queue-close" title="Close (Esc)" aria-label="Close">&times;</button>
     <h2>Queue</h2>
-    <div id="deck-tabs"></div>
     <div class="deck-actions">
       <button id="deck-shuffle">shuffle</button>
-      <button id="deck-play" hidden>play this next</button>
     </div>
     <!-- Only present while something is selected. A permanent "remove
          selected" that does nothing most of the time is furniture. -->
