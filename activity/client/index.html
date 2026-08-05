@@ -33,7 +33,7 @@
     overflow: hidden;
   }
 
-  #stage, #stage-2d {
+  #stage-2d {
     position: fixed;
     inset: 0;
     width: 100%;
@@ -44,7 +44,7 @@
   /* An explicit `display` beats the user-agent's `[hidden] { display: none }`,
      so the hidden state must be restated or both canvases draw at once - which
      made the mode toggle appear to do nothing. */
-  #stage[hidden], #stage-2d[hidden] { display: none; }
+  #stage-2d[hidden] { display: none; }
 
   .readout {
     position: fixed;
@@ -1130,7 +1130,6 @@
   }
 
   /* Landing page: shown to direct visitors instead of a stalled loading state. */
-  body.landing-mode #stage,
   body.landing-mode .readout { display: none; }
 
   /* An explicit `display` beats the user-agent's `[hidden] { display: none }`,
@@ -1226,7 +1225,6 @@
 </style>
 </head>
 <body>
-  <canvas id="stage"></canvas>
   <canvas id="stage-2d"></canvas>
 
   <!-- Visualisation picker. Each viewer's choice is local to them. -->

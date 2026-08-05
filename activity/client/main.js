@@ -358,7 +358,6 @@ async function main() {
     return;
   }
 
-  const shaderCanvas = document.getElementById('stage');
   const canvas2d = document.getElementById('stage-2d');
 
   /**
@@ -371,8 +370,7 @@ async function main() {
   const instances = new Map();
   const getVisual = (entry) => {
     if (!instances.has(entry.id)) {
-      const canvas = entry.mode === 'webgl' ? shaderCanvas : canvas2d;
-      instances.set(entry.id, entry.make(canvas));
+      instances.set(entry.id, entry.make(canvas2d));
     }
     return instances.get(entry.id);
   };
@@ -447,8 +445,7 @@ async function main() {
       strikes.delete(id);
     }
     currentId = id;
-    shaderCanvas.hidden = entry.mode !== 'webgl';
-    canvas2d.hidden = entry.mode === 'webgl';
+    canvas2d.hidden = false;
     menuButton.textContent = entry.name;
     for (const item of menu.children) {
       item.classList.toggle('active', item.dataset.id === id);
@@ -497,10 +494,7 @@ async function main() {
    */
   const failed = new Set();
   /** The canvas the current visualisation draws into. */
-  const visualCanvas = () => {
-    const entry = available.find((candidate) => candidate.id === currentId);
-    return entry ? (entry.mode === 'webgl' ? shaderCanvas : canvas2d) : null;
-  };
+  const visualCanvas = () => canvas2d;
 
   /**
    * Consecutive failures per visualisation.
@@ -691,7 +685,6 @@ async function main() {
 
     if (typeof ResizeObserver === 'function') {
       const observer = new ResizeObserver(nudgeRenderers);
-      observer.observe(shaderCanvas);
       observer.observe(canvas2d);
     }
     document.addEventListener('visibilitychange', () => {

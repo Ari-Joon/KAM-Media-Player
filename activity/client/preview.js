@@ -17,9 +17,7 @@
 
 import { VISUALS } from './registry.js';
 
-const stage = document.getElementById('stage');
 const canvas2d = document.getElementById('canvas2d');
-const shaderCanvas = document.getElementById('shader');
 const visualSelect = document.getElementById('visual');
 const scoreSelect = document.getElementById('score');
 const playButton = document.getElementById('play');
@@ -38,10 +36,7 @@ const showError = (message) => {
 /** Instantiated lazily and kept, exactly as the Activity does. */
 const instances = new Map();
 const getVisual = (entry) => {
-  if (!instances.has(entry.id)) {
-    const canvas = entry.mode === 'webgl' ? shaderCanvas : canvas2d;
-    instances.set(entry.id, entry.make(canvas));
-  }
+  if (!instances.has(entry.id)) instances.set(entry.id, entry.make(canvas2d));
   return instances.get(entry.id);
 };
 
@@ -80,15 +75,13 @@ let audio = null;
 let track = { providerId: 'preview', title: 'Preview', thumbnail: null, performerCount: null };
 
 const entryFor = (id) => available.find((candidate) => candidate.id === id);
-const activeCanvas = () => (entryFor(currentId)?.mode === 'webgl' ? shaderCanvas : canvas2d);
+const activeCanvas = () => canvas2d;
 
 function selectVisual(id) {
   currentId = id;
   visualSelect.value = id;
   localStorage.setItem('kam.preview.visual', id);
-  const entry = entryFor(id);
-  shaderCanvas.hidden = entry.mode !== 'webgl';
-  canvas2d.hidden = entry.mode === 'webgl';
+  canvas2d.hidden = false;
   // Newly revealed canvases have just gained size, and the renderers measure
   // lazily now, so they have to be told.
   for (const instance of instances.values()) instance.resize?.();
@@ -217,7 +210,6 @@ if (typeof ResizeObserver === 'function') {
     for (const instance of instances.values()) instance.resize?.();
   });
   observer.observe(canvas2d);
-  observer.observe(shaderCanvas);
 }
 
 const failed = new Set();
@@ -279,4 +271,3 @@ function frame() {
   requestAnimationFrame(frame);
 })();
 
-void stage;
