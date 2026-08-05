@@ -836,6 +836,40 @@
 
   #fav-list li:active { cursor: grabbing; }
 
+  /* While favourites are being dragged, the queue appears on the opposite edge.
+     Both panels are fixed to the right and are mutually exclusive - opening one
+     closes the other - so with the favourites panel open there was nothing on
+     screen to drop onto, and dragging a favourite into the queue could not work
+     at all however correct the drop handling was. Docking it left also matches
+     the gesture: you drag out of favourites, leftwards, onto the queue. */
+  body.dragging-favourites #queue-panel,
+  body.dragging-favourites #queue-panel[hidden] {
+    display: block;
+    left: 0;
+    right: auto;
+    border-left: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    /* Above the favourites panel, so the pointer reaches it rather than
+       dragging over the panel it started from. */
+    z-index: 7;
+  }
+
+  /* Reads as a target rather than as a panel that happened to open. */
+  body.dragging-favourites #queue-panel::before {
+    content: 'Drop here to queue';
+    display: block;
+    margin-bottom: 10px;
+    padding: 8px;
+    border: 1px dashed rgba(255, 210, 26, 0.45);
+    border-radius: 8px;
+    color: #ffd21a;
+    font-family: var(--ui-font);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-align: center;
+    text-transform: uppercase;
+  }
+
   /* Highlighted while something is being dragged over it, so the target is
      unmistakable - a drop zone with no feedback feels broken even when it works. */
   #queue-panel.drop-target {

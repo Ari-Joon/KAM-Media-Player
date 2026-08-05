@@ -735,6 +735,40 @@ export class Transport {
     }
   }
 
+  /**
+   * End a favourites drag: hide the revealed queue panel and the indicator.
+   *
+   * Called from `dragend` as well as from the drop, because a drag abandoned
+   * over the visualisation never reaches a drop handler and would otherwise
+   * leave the queue docked open on the left.
+   */
+  endFavouriteDrag() {
+    document.body.classList.remove('dragging-favourites');
+    this.clearDropIndicator();
+  }
+
+  /**
+   * Report a drop that the server refused.
+   *
+   * Every failure on this path used to be silent - the client returned on a
+   * non-OK response and swallowed exceptions, and the server answered auth
+   * refusals without logging - so a drop that did nothing looked identical to
+   * a drop that was never received. Shown where the tracks were aimed.
+   *
+   * @param {string} message
+   */
+  showQueueError(message) {
+    const list = this.elements.list;
+    const line = document.createElement('li');
+    line.className = 'empty';
+    line.textContent = message;
+    line.style.color = '#ff8a8a';
+    list.prepend(line);
+    // Cleared by the next real render; removed on a timer in case the queue
+    // does not change, so it cannot become permanent furniture.
+    setTimeout(() => line.remove(), 6000);
+  }
+
   /** Remove the insertion line and forget the cached row geometry. */
   clearDropIndicator() {
     this.elements.panel.classList.remove('drop-target');
@@ -773,12 +807,13 @@ export class Transport {
   async handleQueueDrop(event) {
     event.preventDefault();
     const slot = this.dropSlot;
-    this.clearDropIndicator();
+    this.endFavouriteDrag();
 
     let payload;
     try {
       payload = JSON.parse(event.dataTransfer.getData('application/json'));
     } catch {
+      this.showQueueError('That drop carried nothing this app understands.');
       return;
     }
     if (!Array.isArray(payload) || payload.length === 0) return;
@@ -804,15 +839,19 @@ export class Transport {
           deck: this.viewIndex,
         }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        this.showQueueError(detail.error ?? `The server refused that (${response.status}).`);
+        return;
+      }
       const state = await response.json();
       // The drop changed the order, so the cached signature no longer describes
       // what is on screen and the list has to be rebuilt.
       this.queueSignature = null;
       this.update(state);
       this.onState?.(state);
-    } catch {
-      // The poll loop will resynchronise.
+    } catch (error) {
+      this.showQueueError(`Could not reach the server: ${error.message}`);
     }
   }
 
@@ -1146,9 +1185,17 @@ export class Transport {
         dragEvent.dataTransfer.setData('text/plain',
           chosen.map((track) => track.title).join('\n'));
         this.dragCount = chosen.length;
+
+        // Reveal the queue as a drop target on the opposite edge. Both panels
+        // are docked right and are mutually exclusive, so while favourites are
+        // open there is otherwise nothing on screen to drop onto. Only the
+        // class is set - `hidden` is left alone, so removing it restores
+        // whatever the panel's real state was.
+        document.body.classList.add('dragging-favourites');
       });
-      // A drag that ends anywhere else must not leave the indicator behind.
-      item.addEventListener('dragend', () => this.clearDropIndicator());
+      // A drag that ends anywhere else must not leave the indicator, or the
+      // revealed queue panel, behind.
+      item.addEventListener('dragend', () => this.endFavouriteDrag());
       list.append(item);
     });
   }

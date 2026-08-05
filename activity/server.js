@@ -1031,6 +1031,10 @@ async function authorise(request, { guildId = null, voiceChannel = null } = {}) 
  */
 function sendAuthError(response, error, context) {
   if (error instanceof AuthError) {
+    // Logged, not silent. A refusal is the operator's business: "the button
+    // does nothing" and "the server refused you" look identical from the
+    // client, and without this line neither end says which it was.
+    console.log(`${context}: refused (${error.status}) ${error.message}`);
     return response.status(error.status).json({ error: error.message });
   }
   console.error(`${context}:`, error.message);
