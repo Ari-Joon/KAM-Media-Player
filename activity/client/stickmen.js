@@ -2077,6 +2077,46 @@ const FORMATIONS = [
  * `drift` adds a slow continuous motion on top, so no shot is ever perfectly
  * still: `[x, y, z]` amplitudes and a period in seconds.
  */
+/**
+ * Which shots suit which moment in a track.
+ *
+ * The camera used to take `SHOTS[sectionIndex % SHOTS.length]` - a round robin,
+ * so the music had no say in whether a drop was seen from a crane or from the
+ * floor. Staging is choosing the angle *for the moment*: a quiet passage wants
+ * air around the cast and a long lens, a chorus wants to be close and low, and
+ * a drop wants the most dramatic angle available at the instant it lands.
+ *
+ * Named rather than indexed so the intent survives someone reordering `SHOTS`.
+ */
+const SHOT_PLAN = {
+  quiet: ['wide', 'sidelong', 'overhead', 'crane'],
+  build: ['crane', 'tracking', 'wide', 'sidelong'],
+  // `wide` earns a place here too. Measured over a loud track, the moment
+  // classifier called almost every bar a chorus, so a vocabulary of four close
+  // angles meant the widest shot in the table went unused for the whole song -
+  // and an unbroken run of close work has nothing to be close *against*.
+  chorus: ['low hero', 'close', 'tracking', 'floor', 'wide'],
+  drop: ['low hero', 'floor', 'close'],
+};
+
+/**
+ * Bars held before cutting, by moment and loudness.
+ *
+ * Cut *rate* is what makes footage feel like it belongs to the track. A ballad
+ * that cuts every two bars is frantic; a chorus that holds one angle for thirty
+ * seconds is a webcam. Energy decides, so a song is naturally as cut-heavy as
+ * it is loud, and drops cut hardest.
+ *
+ * Bars rather than seconds, because a cut that lands off the bar reads as a
+ * glitch rather than as an edit.
+ */
+function barsPerCut(moment, energy) {
+  if (moment === 'drop') return 1;
+  if (energy > 0.66) return 2;
+  if (energy > 0.38) return 4;
+  return 8;
+}
+
 const SHOTS = [
   {
     name: 'wide', position: [0, 2.2, -9.5], look: [0, 1.0, 0], target: null,
@@ -2294,8 +2334,19 @@ export class StickMenVisual {
     const frame = Math.max(0, Math.min(
       Math.floor(scoreSec * lanes.fps), lanes.frame_count - 1,
     ));
-    this.energy += (lanes.energy[frame] - this.energy) * 0.09;
-    this.punch += (lanes.punch[frame] - this.punch) * 0.45;
+    // Asymmetric: meet a hit at once, release from it gently.
+    //
+    // These were symmetric, and this file reads the lanes itself rather than
+    // through `LaneReader` - so when the shared smoothing was given a fast
+    // attack, and punch went from keeping 55% of its peak to 99%, the stick men
+    // were the one renderer left out of it. A dancer answering a beat a fifth
+    // of a second late is answering a different beat.
+    const meet = (previous, next, factor) => {
+      const rate = next > previous ? Math.min(1, factor * 4) : factor;
+      return previous + (next - previous) * rate;
+    };
+    this.energy = meet(this.energy, lanes.energy[frame], 0.09);
+    this.punch = meet(this.punch, lanes.punch[frame], 0.45);
 
     // Continuous palette travel, matching the shared renderers. Driven by score
     // position rather than wall time, so everyone watching sees the same colour
@@ -2357,13 +2408,55 @@ export class StickMenVisual {
       this.routine = routineForSection(section, planned);
       this.phraseKey = null;
       if (planned?.palette?.length === 2) this.palette = planned.palette;
-      this.pickShot(section.index);
+      this.sectionStartSec = section.start_sec;
+      this.forceCut = true;
     }
 
     const { tempo_bpm: bpm, meter, beats } = score.timing;
     const interval = 60 / (bpm > 0 ? bpm : 120);
     const origin = beats.length ? beats[0] : 0;
     const beatCount = Math.max(0, playbackSec - origin) / interval;
+
+    // --- Cutting -----------------------------------------------------------
+    //
+    // The camera used to change only at section boundaries - every twenty or
+    // thirty seconds - and always by easing toward the new position. Four
+    // minutes of that is a drone slowly circling a stage. Performance footage
+    // is built from cuts, and cuts that land on the bar.
+    //
+    // Bars, not seconds: an edit that arrives a quarter-beat early reads as a
+    // glitch. The rate comes from the raw lane rather than the smoothed one so
+    // that everyone watching cuts on the same bar regardless of when they
+    // joined.
+    const bars = Math.max(1, meter);
+    const barIndex = Math.floor(beatCount / bars);
+    const rawEnergy = lanes.energy[frame] ?? 0;
+    const intoSection = Math.max(0, scoreSec - (this.sectionStartSec ?? 0));
+    const moment = this.momentFor(score, rawEnergy, intoSection);
+
+    if (this.lastCutBar === undefined) this.lastCutBar = -Infinity;
+    const held = barIndex - this.lastCutBar;
+    const due = held >= barsPerCut(moment, rawEnergy);
+
+    // A section change asks for a cut but does not take one immediately: it
+    // waits for the next bar. Section boundaries do not fall on bar lines, and
+    // a cut a beat and a half into a bar reads as a mistake rather than an
+    // edit - measured, seven of forty-eight cuts were landing off the bar and
+    // every one of them was a section change.
+    const wanted = (this.forceCut && barIndex > this.lastCutBar) || due;
+
+    // Never two cuts in quick succession, whatever asked for them. A forced cut
+    // arriving just after a scheduled one produced holds of under a frame,
+    // which is a flicker.
+    const sinceCut = scoreSec - (this.lastCutSec ?? -Infinity);
+    if (wanted && sinceCut >= 0.9) {
+      this.forceCut = false;
+      this.lastCutBar = barIndex;
+      this.lastCutSec = scoreSec;
+      // Seeded from the bar and the section, so the sequence of angles is a
+      // property of the track rather than of when anyone pressed play.
+      this.pickShot(moment, barIndex * 31 + this.sectionIndex * 17);
+    }
     // Held so `updatePosition` can count the phrase connector in beats rather
     // than seconds, and therefore have it scale with tempo.
     this.bpm = bpm;
@@ -2470,11 +2563,50 @@ export class StickMenVisual {
    * The shot is only a *destination*; the camera eases toward it, so sections
    * flow into each other rather than cutting.
    */
-  pickShot(sectionIndex) {
-    this.shot = SHOTS[sectionIndex % SHOTS.length];
+  pickShot(moment, seed) {
+    const names = SHOT_PLAN[moment] ?? SHOT_PLAN.build;
+    // Deterministic from the seed, which is derived from bar and section - so
+    // every viewer is cut to the same angle at the same moment, and a seek puts
+    // you where you would have been rather than somewhere new.
+    let name = names[Math.abs(seed) % names.length];
+    // Never the same angle twice running: repeating a shot across a cut reads
+    // as a stutter rather than an edit.
+    if (name === this.shot?.name && names.length > 1) {
+      name = names[Math.abs(seed + 1) % names.length];
+    }
+    this.shot = SHOTS.find((candidate) => candidate.name === name) ?? SHOTS[0];
     this.shotTarget = this.shot.target === 'pick'
-      ? sectionIndex % this.dancers.length
+      ? Math.abs(seed * 7 + 3) % Math.max(1, this.dancers.length)
       : null;
+    // Snap on the next camera update rather than easing across the room.
+    this.pendingCut = true;
+  }
+
+  /**
+   * What kind of moment the track is in, for choosing an angle.
+   *
+   * Read from the section table and the raw lane rather than from the smoothed
+   * value, so two people watching the same second agree even if one joined a
+   * moment ago and their smoothing has not settled.
+   *
+   * @param {object} score
+   * @param {number} rawEnergy Lane value at this frame, unsmoothed.
+   * @param {number} intoSection Seconds since the section began.
+   * @returns {'quiet'|'build'|'chorus'|'drop'}
+   */
+  momentFor(score, rawEnergy, intoSection) {
+    const sections = score.sections ?? [];
+    const current = sections[this.sectionIndex];
+    const previous = sections[this.sectionIndex - 1];
+    // A drop is a section arriving markedly louder than the one before it, and
+    // only for its opening seconds - a section that is merely loud throughout
+    // is a chorus, and cutting every bar through all of it would be exhausting.
+    if (current && previous
+      && current.energy_mean - previous.energy_mean > 0.12
+      && intoSection < 6) return 'drop';
+    if (rawEnergy > 0.60) return 'chorus';
+    if (rawEnergy > 0.34) return 'build';
+    return 'quiet';
   }
 
   /**
@@ -2516,8 +2648,21 @@ export class StickMenVisual {
       anchor[2] + shot.look[2],
     ];
 
-    this.camera.position = easeVec(this.camera.position, wantedPosition, 0.55, deltaSec);
-    this.camera.look = easeVec(this.camera.look, wantedLook, 1.1, deltaSec);
+    if (this.pendingCut) {
+      // A cut is instantaneous: the camera is simply somewhere else on the next
+      // frame. Easing between two setups is a *move*, and a move that takes a
+      // second to arrive turns every edit into a swoop - which is why this read
+      // as one endless drifting take however many shots were in the table.
+      //
+      // The drift below still eases, so the new angle is alive from the moment
+      // it lands rather than being locked off.
+      this.pendingCut = false;
+      this.camera.position = wantedPosition;
+      this.camera.look = wantedLook;
+    } else {
+      this.camera.position = easeVec(this.camera.position, wantedPosition, 0.55, deltaSec);
+      this.camera.look = easeVec(this.camera.look, wantedLook, 1.1, deltaSec);
+    }
     this.refreshBasis();
   }
 
