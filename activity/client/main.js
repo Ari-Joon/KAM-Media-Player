@@ -460,13 +460,44 @@ async function main() {
     return entry ? (entry.mode === 'webgl' ? shaderCanvas : canvas2d) : null;
   };
 
+  /**
+   * Consecutive failures per visualisation.
+   *
+   * One bad frame is not a broken visualisation. Several renderers throw on
+   * their very first frame after being selected - state that only exists once
+   * the first frame has run - and disabling on a single exception meant the
+   * viewer was thrown to another visualisation and had to choose theirs twice.
+   * A run of failures is a real fault; one is a hiccup, and the frame it spoiled
+   * is already gone.
+   */
+  const strikes = new Map();
+  const STRIKES_BEFORE_DISABLING = 3;
+
   const visualizer = {
     render: (...args) => {
       const entry = available.find((candidate) => candidate.id === currentId);
       if (!entry) return;
       try {
         getVisual(entry).render(...args);
+        // A frame that worked clears the count, so occasional failures far
+        // apart never accumulate into a disablement.
+        if (strikes.has(entry.id)) strikes.delete(entry.id);
       } catch (error) {
+        const count = (strikes.get(entry.id) ?? 0) + 1;
+        strikes.set(entry.id, count);
+        console.error(`${entry.name} threw (${count}/${STRIKES_BEFORE_DISABLING}):`, error);
+        if (count < STRIKES_BEFORE_DISABLING) {
+          // Named even when it is survivable. The console is unavailable inside
+          // the Discord client, so a fault that recovers by itself would
+          // otherwise never be reportable - and a renderer that throws on every
+          // first frame is still a bug worth fixing, even when nobody sees it.
+          if (count === 1) {
+            setNotice(`${entry.name} hiccuped: ${error.message ?? error}`);
+            setTimeout(() => setNotice(''), 10_000);
+          }
+          return;
+        }
+
         if (!failed.has(entry.id)) {
           failed.add(entry.id);
           console.error(`${entry.name} failed and was disabled:`, error);
