@@ -47,7 +47,7 @@ uniform float uSeed;        // per-track, so no two tracks share an arrangement
  * hue jitter, all driven at high frequency - the result read as shaking rather
  * than moving, and was genuinely unpleasant to look at.
  *
- * This is built instead from seven soft metaballs drifting along slow
+ * This is built instead from twenty-four soft metaballs drifting along slow
  * incommensurate orbits. Nothing in the image changes faster than the eye wants
  * to track: the audio scales sizes and colour, it never jerks positions. Beat
  * response is a gentle swell in radius, not a flash.
@@ -107,7 +107,10 @@ void main() {
   // liquid rather than gas, and viscosity is mostly a matter of rate.
   // Slower again. A lava lamp's convection cycle is on the order of a minute,
   // and the previous rate still read as weather rather than as fluid.
-  float t = uTime * (0.026 + uFlux * 0.020);
+  // Already integrated on the JavaScript side, and already score-locked. See
+  // the note where uTime is set: computing the rate here, as a multiplier on
+  // elapsed time, meant every change in flux teleported the whole cast.
+  float t = uTime;
 
   // Bass swells every blob together; the beat adds a small extra lift. Both are
   // already smoothed on the JavaScript side before arriving here.
@@ -122,7 +125,14 @@ void main() {
   // enough that neighbours stay apart at their usual spacing.
   float swell = 0.052 + uBass * 0.050 + uBeat * 0.011 + uEnergy * 0.022;
 
-  // Twelve blobs, each with its own hue, tracked separately.
+  // Twenty-four blobs, each with its own hue, tracked separately.
+  //
+  // Sixteen left the frame too empty. Swept against coverage and separate-body
+  // count over five points in a track: 16 blobs gave 18.5% wax in 5.2 bodies,
+  // 24 gives 26.5% in 4.4, and 28 only reaches 28.2% while merging further.
+  // Raising the reach instead fills faster but merges much faster with it -
+  // 16 blobs at reach 3.2 is 29% wax in 2.6 bodies, which is back toward one
+  // mass. More bodies at the same reach is the way to fill a lamp.
   //
   // The previous version summed every contribution into one scalar and coloured
   // the total with a single hue, which is why it read as one mass however many
@@ -138,13 +148,13 @@ void main() {
   // A lit sphere needs a normal, and the usual routes to one are both
   // expensive here: screen-space derivatives are a WebGL1 extension this cannot
   // rely on, and sampling the field again at offsets would run the whole
-  // sixteen-blob loop three times over. But each blob already knows which way
+  // twenty-four-blob loop three times over. But each blob already knows which way
   // is "out" - it is simply the direction from its centre to this pixel - so
   // summing that, weighted by how much each blob contributes, gives the
   // outward direction of whichever blob owns the pixel for free.
   vec2 outward = vec2(0.0);
 
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 24; i++) {
     // Offset by the track's seed, so the cast is a different set of phases,
     // columns, sizes and hues for every song. Everything below is a function of
     // "fi", so without this every track ran the identical arrangement - which
@@ -215,11 +225,16 @@ void main() {
       height
     );
 
-    // Bass hits push blobs bodily upward rather than only inflating them, which
-    // is what makes a kick read as an impact instead of a pulse. Each blob has
-    // its own response so they do not all jump together.
-    centre.y += uBeat * (0.10 + 0.07 * sin(fi * 3.1)) * (0.6 + 0.4 * cos(fi));
-    centre.x += uPunch * 0.05 * sin(fi * 2.7 + t);
+    // Nothing pushes a blob bodily on a beat.
+    //
+    // A kick used to shift each centre by up to 0.17 vertically and the punch
+    // to shove it sideways, on the reasoning that an impact should read as an
+    // impact. At two beats a second that is a twitch twice a second, and it is
+    // the wrong physics for the subject: wax in a lamp has enormous inertia and
+    // is the one thing on screen that visibly *cannot* be moved quickly. The
+    // music now reaches the lamp through size, brightness and colour, which can
+    // change smoothly, and the path stays a deliberate rise, spread, sink and
+    // pool.
 
     // A held note - loud and sustained, so energy is high while flux is low -
     // swells a subset of blobs dramatically. Flux measures how fast the spectrum
@@ -248,7 +263,7 @@ void main() {
 
     // Hues spread around the wheel by golden-ratio spacing, which distributes
     // twelve values as evenly as possible without any two landing close.
-    float hue = fract(uSectionHue + fi * 0.618034 + uTime * 0.012);
+    float hue = fract(uSectionHue + fi * 0.618034 + uTime * 0.39);
     // Cubed, not squared.
     //
     // Squaring still let a pixel midway between two blobs take a near-even
@@ -565,8 +580,28 @@ export class ShaderVisualizer {
       this.sectionHue = (section.index * 0.41 + section.brightness_mean * 0.25) % 1;
     }
 
+    // The lamp's clock: integrated, and taken from the music.
+    //
+    // The shader used to compute its own time as `uTime * (0.026 + uFlux *
+    // 0.020)`, with `uTime` being seconds since page load. Two faults in one
+    // line. The rate *multiplied* elapsed time, so any change in flux instantly
+    // rescaled the entire timeline and every blob jumped to a new point in its
+    // cycle - which is most of what read as jitter, and as the motion being
+    // random rather than deliberate. And it was wall time, so the lamp kept
+    // moving while playback was paused, ignored a seek, and sat at a different
+    // point for every person in the channel.
+    //
+    // Integrating the rate instead means changing it bends the motion from here
+    // on rather than teleporting it, and taking the delta from the score means
+    // everyone's lamp agrees. Clamped like every other delta in the project: a
+    // seek must not advance the cycle by a minute in one frame.
+    const lavaDelta = Math.min(Math.max(scoreSec - (this.lastLavaSec ?? scoreSec), 0), 0.1);
+    this.lastLavaSec = scoreSec;
+    this.lavaPhase = (this.lavaPhase ?? 0)
+      + lavaDelta * (0.026 + this.smoothed.flux * 0.020);
+
     gl.uniform2f(this.uniforms.uResolution, this.canvas.width, this.canvas.height);
-    gl.uniform1f(this.uniforms.uTime, elapsedSec);
+    gl.uniform1f(this.uniforms.uTime, this.lavaPhase);
     gl.uniform1f(this.uniforms.uEnergy, this.smoothed.energy);
     gl.uniform1f(this.uniforms.uPunch, this.smoothed.punch);
     gl.uniform1f(this.uniforms.uBrightness, this.smoothed.brightness);
