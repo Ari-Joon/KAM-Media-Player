@@ -346,6 +346,35 @@ export class PlaylistPanel {
     top.append(count);
     card.append(top);
 
+    // Queue the whole thing.
+    //
+    // Clicking one track queues one track, which is obvious once you know it
+    // and invisible until then - there was no way at all to play a playlist,
+    // which is most of what a playlist is for. The button sends the tracks in
+    // one request rather than one per track: each call otherwise fetches the
+    // channel, prepares the player and connects to voice, all repeated.
+    if (entry.tracks.length > 0) {
+      const queueAll = document.createElement('button');
+      queueAll.className = 'queue-all';
+      queueAll.type = 'button';
+      queueAll.textContent = 'Queue all';
+      queueAll.title = `Add all ${entry.tracks.length} tracks to the queue`;
+      queueAll.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        queueAll.disabled = true;
+        // What is on screen, not the whole playlist: with a search running, the
+        // visible rows are what "all" means to whoever is looking at it.
+        const wanted = entry.tracks.filter((track) => this.matches(track));
+        try {
+          await this.context.enqueueMany(wanted);
+          this.context.notify(`Queued ${wanted.length} from ${entry.name}.`);
+        } finally {
+          queueAll.disabled = false;
+        }
+      });
+      top.append(queueAll);
+    }
+
     if (!own && entry.user) {
       const owner = document.createElement('div');
       owner.className = 'owner';

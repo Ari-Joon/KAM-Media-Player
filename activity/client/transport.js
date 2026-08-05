@@ -148,6 +148,18 @@ export class Transport {
     this.favView = { sort: 'latest', folder: null, query: '', expanded: new Set() };
     /** Track keys currently selected in the favourites panel. */
     this.favSelection = new Set();
+    /**
+     * Selected queue positions, for removing several at once.
+     *
+     * Absolute positions from the server rather than display indices: the queue
+     * changes underneath while the panel is open, and an index would come to
+     * mean a different track than the one that was clicked.
+     *
+     * @type {Set<number>}
+     */
+    this.queueSelection = new Set();
+    /** Last row touched, so shift-click has something to extend from. */
+    this.queueAnchor = null;
     /** Row index anchoring a shift-click range. */
     this.favAnchor = null;
     /** How many tracks the in-flight drag carries, shown on the indicator. */
@@ -221,6 +233,10 @@ export class Transport {
       favSearchClear: document.getElementById('fav-search-clear'),
       favFolders: document.getElementById('fav-folders'),
       tabs: document.getElementById('deck-tabs'),
+      queueSelectionBar: document.getElementById('queue-selection'),
+      queueSelectionCount: document.getElementById('queue-selection-count'),
+      queueRemoveSelected: document.getElementById('queue-remove-selected'),
+      queueClearSelection: document.getElementById('queue-clear-selection'),
       deckShuffle: document.getElementById('deck-shuffle'),
       deckPlay: document.getElementById('deck-play'),
     };
@@ -258,6 +274,7 @@ export class Transport {
       guildId: this.guildId,
       authHeaders: () => this.authHeaders(),
       enqueue: (track) => this.addToQueue(track).catch((error) => notify(error.message)),
+      enqueueMany: (tracks) => this.addManyToQueue(tracks).catch((error) => notify(error.message)),
       notify,
     });
 
@@ -387,6 +404,14 @@ export class Transport {
     // `index.html` older than the JavaScript, and it is the right behaviour for
     // the transport's own controls - but it would mean a missing playlists
     // button taking down the player, the queue and the visualisations with it.
+    this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
+    this.elements.queueClearSelection.addEventListener('click', () => {
+      this.queueSelection.clear();
+      this.queueAnchor = null;
+      this.queueSignature = null;
+      if (this.lastDecks) this.renderDecks(this.lastDecks);
+    });
+
     const playlistsButton = document.getElementById('t-playlists');
     playlistsButton?.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -673,8 +698,25 @@ export class Transport {
       return;
     }
 
+    // Paint from the current offset, whatever put it there.
+    //
+    // This used to happen only on the scrolling path, after the pause check
+    // returned early - so a title parked at its start kept the leading fade
+    // that had been applied while it was scrolling, and its first characters
+    // stayed masked for the whole pause. Clicking the title made it worst: that
+    // sets a four second hold, so the beginning of the name was eaten for four
+    // seconds at exactly the moment somebody had asked to read it.
+    const paint = () => {
+      const shift = Math.max(0, this.marquee.offset);
+      title.style.transform = `translateX(${-shift}px)`;
+      // The leading fade only applies once scrolled away from the start, so a
+      // parked title is never clipped at its first character.
+      titleWindow.classList.toggle('scrolled', shift > 1);
+    };
+
     if (this.marquee.paused > 0) {
       this.marquee.paused -= deltaSec;
+      paint();
       return;
     }
 
@@ -687,11 +729,7 @@ export class Transport {
       this.marquee.paused = 2.5;
     }
 
-    const shift = Math.max(0, this.marquee.offset);
-    title.style.transform = `translateX(${-shift}px)`;
-    // The leading fade only applies once scrolled, so a parked title is never
-    // clipped at its first character.
-    titleWindow.classList.toggle('scrolled', shift > 1);
+    paint();
   }
 
   /**
@@ -1025,6 +1063,38 @@ export class Transport {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.error ?? 'Could not queue that track.');
+    }
+    const state = await response.json();
+    this.update(state);
+    this.onState?.(state);
+    this.queueSignature = null;
+  }
+
+  /**
+   * Queue several tracks in one request.
+   *
+   * One call, not one per track: each of these fetches the channel, prepares
+   * the player and connects to voice, so a fifty track playlist sent one at a
+   * time would repeat all of that fifty times and interleave fifty writes to
+   * the queue while the voice player is running. The server already accepts a
+   * batch - this is the same path a multiple selection of favourites uses.
+   *
+   * @param {object[]} tracks
+   */
+  async addManyToQueue(tracks) {
+    if (tracks.length === 0) return;
+    const response = await fetch(`/api/queue/${this.channelId}`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        tracks: tracks.map((track) => ({
+          provider: track.provider, providerId: track.providerId,
+        })),
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error ?? 'Could not queue those tracks.');
     }
     const state = await response.json();
     this.update(state);
@@ -1500,6 +1570,10 @@ export class Transport {
    */
   renderDecks(decks) {
     if (this.viewIndex >= decks.decks.length) this.viewIndex = decks.activeIndex;
+    // Held so a selection change can repaint without waiting for the next
+    // server snapshot, which is up to 600ms away and would make every click
+    // feel broken.
+    this.lastDecks = decks;
 
     const signature = decks.decks
       .map((deck) => `${deck.name}:${deck.total}:${deck.active}`).join('|')
@@ -1619,11 +1693,88 @@ export class Transport {
       item.title = `Play ${track.title}`;
       item.dataset.menuTrack = menuTrack(track);
       // Absolute position from the server, not the display index, so it stays
-      // correct while the queue changes underneath.
-      item.addEventListener('click', () => this.send('jumpDeck', {
-        deck: this.viewIndex, position: track.position,
-      }));
+      // Multi-select, so a queue can be cleared out in one go rather than one
+      // row at a time. Ctrl toggles, shift extends from the last row touched -
+      // the same gestures the favourites panel uses, and the same ones every
+      // file manager uses, so there is nothing new to learn.
+      //
+      // Keyed on the absolute position rather than the display index: the queue
+      // changes underneath while this panel is open, and an index would select
+      // a different track than the one clicked.
+      if (this.queueSelection.has(track.position)) item.classList.add('selected');
+
+      item.addEventListener('click', (event) => {
+        if (event.shiftKey && this.queueAnchor !== null) {
+          const positions = queue.upcoming.map((other) => other.position);
+          const from = positions.indexOf(this.queueAnchor);
+          const to = positions.indexOf(track.position);
+          if (from >= 0 && to >= 0) {
+            this.queueSelection.clear();
+            for (let i = Math.min(from, to); i <= Math.max(from, to); i += 1) {
+              this.queueSelection.add(positions[i]);
+            }
+            this.queueSignature = null;
+            this.renderDecks(this.lastDecks);
+            return;
+          }
+        }
+        if (event.ctrlKey || event.metaKey) {
+          if (this.queueSelection.has(track.position)) {
+            this.queueSelection.delete(track.position);
+          } else {
+            this.queueSelection.add(track.position);
+          }
+          this.queueAnchor = track.position;
+          this.queueSignature = null;
+          this.renderDecks(this.lastDecks);
+          return;
+        }
+        // A plain click with a selection open clears it rather than jumping:
+        // jumping the room's music because somebody clicked to deselect would
+        // be a nasty surprise.
+        if (this.queueSelection.size > 0) {
+          this.queueSelection.clear();
+          this.queueAnchor = null;
+          this.queueSignature = null;
+          this.renderDecks(this.lastDecks);
+          return;
+        }
+        // Absolute position from the server, not the display index, so it stays
+        // correct while the queue changes underneath.
+        this.queueAnchor = track.position;
+        this.send('jumpDeck', { deck: this.viewIndex, position: track.position });
+      });
       list.append(item);
     });
+
+    this.updateQueueSelectionBar();
+  }
+
+  /**
+   * Show or hide the bar that acts on a selection.
+   *
+   * Only present while something is selected. A permanent "remove selected"
+   * button that does nothing most of the time is furniture.
+   */
+  updateQueueSelectionBar() {
+    const bar = this.elements.queueSelectionBar;
+    if (!bar) return;
+    const count = this.queueSelection.size;
+    bar.hidden = count === 0;
+    if (count === 0) return;
+    this.elements.queueSelectionCount.textContent =
+      `${count} selected`;
+  }
+
+  /** Remove every selected track in one request. */
+  async removeSelected() {
+    const positions = [...this.queueSelection];
+    if (positions.length === 0) return;
+    // Cleared immediately: the rows have gone as far as the user is concerned,
+    // and leaving them lit through the round trip looks like a failure.
+    this.queueSelection.clear();
+    this.queueAnchor = null;
+    this.queueSignature = null;
+    await this.send('removeTracks', { deck: this.viewIndex, positions });
   }
 }

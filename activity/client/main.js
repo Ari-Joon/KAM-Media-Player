@@ -78,6 +78,31 @@ function closeAllOverlays() {
   document.getElementById('t-queue')?.classList.remove('active');
 }
 
+/**
+ * Where an error came from, short enough to sit in the on-screen notice.
+ *
+ * A message alone is not enough to act on. "Cannot read properties of undefined
+ * (reading 'x')" was reported from a real session and could not be reproduced
+ * afterwards - 1040 cold starts across every cached score, at four playback
+ * positions and four cast sizes, with track changes throughout, all clean. The
+ * console is unavailable inside the Discord client, so without the location in
+ * the notice itself there is nothing to go on but the message.
+ *
+ * Built from the stack rather than logged, because the person who sees the
+ * failure is not the person with devtools open - they are usually the same
+ * person, in an iframe, with no way to open them.
+ *
+ * @param {Error} error
+ * @returns {string} Something like `(stickmen.js:3421)`, or an empty string.
+ */
+function originOf(error) {
+  const frame = String(error?.stack ?? '').split('\n')[1] ?? '';
+  // Matches both `at Foo.bar (http://host/file.js:12:34)` and the bare
+  // `at http://host/file.js:12:34` that minified builds produce.
+  const at = frame.match(/([\w.-]+\.js):(\d+):\d+/);
+  return at ? `(${at[1]}:${at[2]})` : '';
+}
+
 /** Read a stored preference, tolerating storage being unavailable. */
 function readStored(key, fallback) {
   try {
@@ -529,7 +554,8 @@ async function main() {
           // otherwise never be reportable - and a renderer that throws on every
           // first frame is still a bug worth fixing, even when nobody sees it.
           if (count === 1) {
-            setNotice(`${entry.name} hiccuped: ${error.message ?? error}`, 12_000);
+            setNotice(`${entry.name} hiccuped: ${error.message ?? error} ${originOf(error)}`,
+              12_000);
           }
           return;
         }
@@ -542,7 +568,7 @@ async function main() {
           // visualisation that dies has, until now, been able to say nothing
           // at all to the one person who can see it happen.
           // Held, so the poll loop cannot wipe it before it is read.
-          setNotice(`${entry.name} failed: ${error.message ?? error}`, 25_000);
+          setNotice(`${entry.name} failed: ${error.message ?? error} ${originOf(error)}`, 25_000);
         }
         // Never fall back to "None".
         //

@@ -999,7 +999,25 @@ app.get('/api/now-playing/:channelId', (request, response) => {
   if (!player?.queue.current()) {
     return response.status(404).json({ error: 'Nothing playing.' });
   }
-  response.json(player.snapshot());
+
+  // The star, filled in for whoever is asking.
+  //
+  // The client has always sent `?userId=`, and this route has always thrown it
+  // away and answered with a bare snapshot - so `favourited` arrived only on
+  // the replies to button presses. The star was therefore correct right after
+  // you pressed something and wrong from the next track change onwards, which
+  // is exactly how it was reported: "sometimes a favourited song doesn't have
+  // the star highlighted".
+  //
+  // The id is asserted by the caller, not verified. That is acceptable here and
+  // nowhere that writes: it decides whether one star is drawn filled, and the
+  // worst a forged id achieves is learning whether that user has favourited the
+  // track currently playing in a channel they can already see. The poll is
+  // deliberately unauthenticated - it runs twice a second per viewer - and
+  // every route that changes anything takes its identity from the token
+  // instead. See `authorise`.
+  const viewerId = typeof request.query.userId === 'string' ? request.query.userId : null;
+  response.json(withFavourite(player, viewerId));
 });
 
 /** Resolves OAuth tokens to the Discord user that owns them. */
@@ -1750,6 +1768,25 @@ app.post('/api/control/:channelId', rateLimit(120, 60_000), async (request, resp
         const deck = player.decks.resolve(value?.deck ?? null);
         if (!deck) return response.status(400).json({ error: 'No such playlist.' });
         deck.queue.remove(Number(value?.position));
+        break;
+      }
+      case 'removeTracks': {
+        const deck = player.decks.resolve(value?.deck ?? null);
+        if (!deck) return response.status(400).json({ error: 'No such playlist.' });
+
+        // Descending, always. Removing a position shifts everything below it up
+        // by one, so ascending removal deletes the wrong tracks from the second
+        // onwards - and does it silently, because every index is still valid.
+        // Sorted here rather than trusting the client to have done it.
+        const positions = [...new Set(
+          (Array.isArray(value?.positions) ? value.positions : [])
+            .map(Number).filter(Number.isFinite),
+        )].sort((a, b) => b - a);
+
+        if (positions.length === 0) {
+          return response.status(400).json({ error: 'No tracks given.' });
+        }
+        for (const position of positions) deck.queue.remove(position);
         break;
       }
       case 'shuffleDeck': {

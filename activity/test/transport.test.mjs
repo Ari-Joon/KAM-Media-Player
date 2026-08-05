@@ -120,3 +120,64 @@ console.log('updateDropTarget: 11/11 pass (gap tracking, no-op guard)');
   assert.equal(typeof PainterVisual, 'function', 'painter module still loads');
   console.log('painter duration: 6/6 pass (paced from the track, not a 240 fallback)');
 }
+
+// --- The marquee must not mask the start of a parked title -------------------
+//
+// Called against the prototype, like the drop arithmetic above: none of this
+// needs the full transport markup, only a title and its window.
+//
+// The fault was that the fade mask was applied on the scrolling path only,
+// *after* the pause check returned early. So a title parked at its beginning
+// kept the leading fade that had been applied while it was scrolling, and its
+// first characters stayed hidden for the whole hold. Clicking the title is the
+// worst case, because that is what sets the longest hold - the name was eaten
+// at exactly the moment somebody asked to read it.
+{
+  const { tickMarquee } = Transport.prototype;
+
+  const makeWindow = () => {
+    const classes = new Set();
+    return {
+      clientWidth: 100,
+      classList: {
+        toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+        has: (name) => classes.has(name),
+      },
+    };
+  };
+
+  const scrolledFor = (marquee, frames) => {
+    const titleWindow = makeWindow();
+    const title = { scrollWidth: 300, style: {} };
+    const self = { elements: { title, titleWindow }, marquee };
+    for (let i = 0; i < frames; i += 1) tickMarquee.call(self, 1 / 60);
+    return { scrolled: titleWindow.classList.has('scrolled'), transform: title.style.transform };
+  };
+
+  // Parked at the start and held, which is the state a click produces.
+  const clicked = scrolledFor({ offset: 0, paused: 4 }, 1);
+  assert.equal(clicked.scrolled, false,
+    'a title held at its start must not carry the leading fade');
+  assert.equal(clicked.transform, 'translateX(0px)');
+
+  // Once it has scrolled away, the leading fade is right - that is what stops
+  // the text appearing to slide out from under a hard edge.
+  const moved = scrolledFor({ offset: 0, paused: 0 }, 60);
+  assert.equal(moved.scrolled, true, 'a scrolled title fades at both edges');
+
+  // Held mid-scroll: still faded, because it is still away from the start.
+  const heldAway = scrolledFor({ offset: 40, paused: 2 }, 1);
+  assert.equal(heldAway.scrolled, true);
+  assert.equal(heldAway.transform, 'translateX(-40px)');
+
+  // A title that fits never scrolls and never fades.
+  {
+    const titleWindow = makeWindow();
+    const title = { scrollWidth: 90, style: {} };
+    const self = { elements: { title, titleWindow }, marquee: { offset: 0, paused: 0 } };
+    tickMarquee.call(self, 1 / 60);
+    assert.equal(titleWindow.classList.has('scrolled'), false);
+  }
+
+  console.log('title marquee: 5/5 pass (a parked title is never masked at its start)');
+}

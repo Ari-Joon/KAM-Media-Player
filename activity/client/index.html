@@ -663,6 +663,25 @@
     color: var(--trace);
   }
 
+  #playlist-panel .queue-all {
+    flex: none;
+    appearance: none;
+    border: 1px solid rgba(255, 210, 26, 0.35);
+    background: rgba(255, 210, 26, 0.10);
+    color: #ffd21a;
+    font-family: var(--ui-font);
+    font-size: calc(8.5px * var(--ui-scale));
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  #playlist-panel .queue-all:hover { background: rgba(255, 210, 26, 0.22); }
+  #playlist-panel .queue-all:disabled { opacity: 0.5; cursor: default; }
+
   #playlist-panel .count {
     flex: none;
     font-family: var(--ui-font);
@@ -966,7 +985,12 @@
 
   .search-row { position: relative; margin-bottom: 8px; }
 
-  #fav-search {
+  /* Both in-panel search boxes, in one rule. The playlists one had no rule of
+     its own and fell back to the browser default - a white box in a different
+     font - which is the same way the close button went wrong. Anything that
+     appears in more than one panel belongs to a shared selector, not to
+     whichever panel happened to be written first. */
+  #fav-search, #playlist-search {
     width: 100%;
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -978,9 +1002,9 @@
     border-radius: 7px;
   }
 
-  #fav-search::placeholder { color: var(--trace-dim); }
+  #fav-search::placeholder, #playlist-search::placeholder { color: var(--trace-dim); }
 
-  #fav-search:focus {
+  #fav-search:focus, #playlist-search:focus {
     outline: none;
     border-color: rgba(255, 210, 26, 0.55);
     background: rgba(255, 255, 255, 0.08);
@@ -1261,6 +1285,51 @@
   }
 
   #queue-close:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.5); }
+
+  #queue-selection {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 7px 9px;
+    border: 1px solid rgba(255, 210, 26, 0.35);
+    background: rgba(255, 210, 26, 0.08);
+    border-radius: 8px;
+  }
+
+  #queue-selection[hidden] { display: none; }
+
+  #queue-selection-count {
+    flex: 1 1 auto;
+    font-size: 12px;
+    color: #ffd21a;
+  }
+
+  #queue-selection button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--trace);
+    font-family: var(--ui-font);
+    font-size: calc(9px * var(--ui-scale));
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 5px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  #queue-remove-selected:hover { color: #ff6b6b; border-color: rgba(255, 107, 107, 0.5); }
+  #queue-clear-selection:hover { color: #ffd21a; border-color: rgba(255, 210, 26, 0.4); }
+
+  .queue-hint { margin: -4px 0 10px; opacity: 0.65; }
+
+  /* Selected rows, matching the favourites panel so the gesture reads as the
+     same gesture in both places. */
+  #queue-list li.selected {
+    background: rgba(255, 210, 26, 0.16);
+    box-shadow: inset 0 0 0 1px rgba(255, 210, 26, 0.4);
+  }
 
   #queue-panel h2 {
     margin: 0 0 14px;
@@ -1605,7 +1674,7 @@
       everyone in this server.
     </p>
     <div class="search-row">
-      <input id="playlist-search" type="search" placeholder="Search every playlist"
+      <input id="playlist-search" type="search" placeholder="Total song search"
              autocomplete="off" spellcheck="false">
       <button id="playlist-search-clear" title="Clear search" hidden>&times;</button>
     </div>
@@ -1630,6 +1699,14 @@
       <button id="deck-shuffle">shuffle</button>
       <button id="deck-play" hidden>play this next</button>
     </div>
+    <!-- Only present while something is selected. A permanent "remove
+         selected" that does nothing most of the time is furniture. -->
+    <div id="queue-selection" hidden>
+      <span id="queue-selection-count"></span>
+      <button id="queue-remove-selected">Remove</button>
+      <button id="queue-clear-selection">Cancel</button>
+    </div>
+    <p class="panel-note queue-hint">Ctrl-click to select, shift-click for a range.</p>
     <ol id="queue-list"></ol>
   </aside>
 
