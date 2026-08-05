@@ -292,7 +292,33 @@ async function waitForScore(intervalMs = 1500) {
 }
 
 /** Write a message into the unobtrusive notice strip. @param {string} message */
-function setNotice(message) {
+/**
+ * Until when the notice is holding an important message.
+ *
+ * The poll loop calls `setNotice` every 600ms to show or clear "Analysing new
+ * track", which meant any message written by anything else survived for at most
+ * half a second. A render failure therefore announced itself and was wiped
+ * before it could be read - which is precisely why a visualisation that dies
+ * has been so hard to diagnose from inside the Discord client, where there is
+ * no console to fall back on.
+ */
+let noticeHeldUntil = 0;
+
+/**
+ * Write a message into the notice strip.
+ *
+ * @param {string} message
+ * @param {number} [holdMs] Keep it for at least this long, ignoring routine
+ *   traffic from the poll loop.
+ */
+function setNotice(message, holdMs = 0) {
+  const now = Date.now();
+  if (holdMs > 0) {
+    noticeHeldUntil = now + holdMs;
+  } else if (now < noticeHeldUntil) {
+    // Something more important is on screen; routine updates wait their turn.
+    return;
+  }
   const notice = document.getElementById('notice');
   notice.textContent = message;
   notice.hidden = !message;
@@ -401,9 +427,25 @@ async function main() {
   const menuButton = document.getElementById('visual-button');
   const menu = document.getElementById('visual-menu');
 
-  const selectVisual = (id) => {
+  /**
+   * Show a visualisation.
+   *
+   * @param {string} id
+   * @param {boolean} [byUser] True when a person chose it from the menu, as
+   *   opposed to the render guard substituting one.
+   */
+  const selectVisual = (id, byUser = false) => {
     const entry = available.find((candidate) => candidate.id === id);
     if (!entry) return;
+    // Choosing something deliberately always gives it another chance. A
+    // visualisation disabled earlier in the session stayed disabled until the
+    // page was reloaded, so picking it from the menu appeared to do nothing -
+    // the guard simply substituted another one again, and the menu looked
+    // broken rather than the renderer.
+    if (byUser) {
+      failed.delete(id);
+      strikes.delete(id);
+    }
     currentId = id;
     shaderCanvas.hidden = entry.mode !== 'webgl';
     canvas2d.hidden = entry.mode === 'webgl';
@@ -419,7 +461,7 @@ async function main() {
     item.textContent = entry.name;
     item.addEventListener('click', (event) => {
       event.stopPropagation();
-      selectVisual(entry.id);
+      selectVisual(entry.id, true);
       menu.hidden = true;
     });
     menu.append(item);
@@ -492,8 +534,7 @@ async function main() {
           // otherwise never be reportable - and a renderer that throws on every
           // first frame is still a bug worth fixing, even when nobody sees it.
           if (count === 1) {
-            setNotice(`${entry.name} hiccuped: ${error.message ?? error}`);
-            setTimeout(() => setNotice(''), 10_000);
+            setNotice(`${entry.name} hiccuped: ${error.message ?? error}`, 12_000);
           }
           return;
         }
@@ -505,10 +546,8 @@ async function main() {
           // Discord client, where the console is disabled by default - so a
           // visualisation that dies has, until now, been able to say nothing
           // at all to the one person who can see it happen.
-          setNotice(`${entry.name} failed: ${error.message ?? error}`);
-          // Long enough to read and copy, short enough not to become
-          // permanent furniture over a working visualisation.
-          setTimeout(() => setNotice(''), 20_000);
+          // Held, so the poll loop cannot wipe it before it is read.
+          setNotice(`${entry.name} failed: ${error.message ?? error}`, 25_000);
         }
         // Never fall back to "None".
         //
