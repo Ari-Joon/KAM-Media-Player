@@ -62,10 +62,17 @@ const DEG = Math.PI / 180;
 /**
  * Smallest angle a limb may sit from the torso, in radians.
  *
- * Roughly 26 degrees for arms and 15 for legs. Below that a limb visually merges
- * with the body and the figure stops reading as posed at all.
+ * Below this a limb visually merges with the body and the figure stops reading
+ * as posed at all - it becomes a stick with a head.
+ *
+ * Arms sit at 41 degrees, a fifth wider than the 34 they held before. The floor
+ * is what a pose is pushed *out to*, so raising it does not open the arms of a
+ * figure that was already reaching; it narrows the band of poses that end up
+ * against the body at all, which is exactly "less likely to have his arms at
+ * his side". Legs are left alone: they carry the weight, and a stance forced
+ * wider reads as a limp rather than as dancing.
  */
-const MIN_ARM_SPREAD = 34 * (Math.PI / 180);
+const MIN_ARM_SPREAD = 41 * (Math.PI / 180);
 const MIN_LEG_SPREAD = 15 * (Math.PI / 180);
 
 /** Longest a limb may stay tucked against the body, in seconds. */
@@ -163,7 +170,12 @@ const REST = {
  */
 const LIMITS = {
   armSwing: [-170 * DEG, 45 * DEG],
-  armLift: [-105 * DEG, 105 * DEG],
+  // Ceiling lowered a tenth, from 105 degrees to 94: past vertical an arm
+  // reads as flailing above the head rather than as reaching, and the pose
+  // loses its line. The floor is untouched - an arm swinging low across the
+  // body is a real gesture, and the spread limit already keeps it off the
+  // torso.
+  armLift: [-105 * DEG, 94 * DEG],
   // Capped well below a full fold. Past about 110 degrees the forearm is
   // travelling back toward the shoulder rather than doing anything visible, and
   // the figure reads as having its arms clamped to its sides.

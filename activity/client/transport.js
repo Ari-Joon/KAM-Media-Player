@@ -799,6 +799,8 @@ export class Transport {
   /** Close every panel and menu this transport owns. */
   closeEverything() {
     this.closePanels();
+    this.elements.panel.hidden = true;
+    this.elements.queueButton.classList.remove('active');
     this.trackMenu?.close();
     const sheet = document.getElementById('shortcuts-panel');
     if (sheet) sheet.hidden = true;
@@ -1328,12 +1330,18 @@ export class Transport {
   }
 
   /** Hide every side panel. */
+  /**
+   * Close the panels that share the right-hand edge.
+   *
+   * The queue is deliberately not among them: it sits on the left and is meant
+   * to stay open while search, favourites or playlists are used, which is the
+   * whole reason it moved. `closeEverything` still takes it, so Escape and the
+   * shortcut close the lot.
+   */
   closePanels() {
-    this.elements.panel.hidden = true;
     this.elements.favPanel.hidden = true;
     this.elements.searchPanel.hidden = true;
     this.playlists.close();
-    this.elements.queueButton.classList.remove('active');
   }
 
   /**

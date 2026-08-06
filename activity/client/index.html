@@ -1495,16 +1495,23 @@
 
   #t-fav.active { color: #ffd21a; }
 
+  /* The queue lives on the left, alone.
+     Every other panel is pinned to the right edge and they take turns; the
+     queue is the one you want open *while* using another, to see where a track
+     is about to land. Sharing an edge made that impossible - opening playlists
+     closed the queue - so it has its own side and closes only when asked. It
+     also means the favourites drag no longer has to move it out of the way
+     mid-gesture, because it is already somewhere else. */
   #queue-panel {
     position: fixed;
     top: 0;
-    right: 0;
+    left: 0;
     bottom: 0;
     width: min(320px, 80%);
     padding: 22px 18px;
     background: rgba(8, 8, 12, 0.86);
     backdrop-filter: blur(16px);
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
     overflow-y: auto;
     z-index: 6;
   }
