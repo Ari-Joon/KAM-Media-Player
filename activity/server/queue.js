@@ -265,9 +265,58 @@ export class Queue {
    */
   shuffle() {
     if (this.tracks.length > this.index + 2) {
+      // The order before shuffling, kept so it can be put back. Without it the
+      // button could only ever light up: turning shuffle "off" would have
+      // nothing to return to, and the indicator stayed on for the rest of the
+      // session however many times it was pressed.
+      this.order = this.tracks.slice();
       shuffleFrom(this.tracks, Math.max(this.index, 0));
     }
     this.shuffled = true;
+  }
+
+  /**
+   * Put the pre-shuffle order back, as far as it still applies.
+   *
+   * Tracks added or removed since are respected rather than resurrected: the
+   * remembered order is filtered down to what is still in the queue, and
+   * anything new keeps its place at the end. Restoring the old array wholesale
+   * would delete tracks queued after the shuffle and bring back ones somebody
+   * had removed.
+   *
+   * @returns {boolean} Whether an order was restored.
+   */
+  unshuffle() {
+    this.shuffled = false;
+    if (!this.order) return false;
+
+    const current = this.current();
+    const present = new Set(this.tracks.map((track) => track.providerId));
+    const restored = this.order.filter((track) => present.has(track.providerId));
+    const known = new Set(restored.map((track) => track.providerId));
+    for (const track of this.tracks) {
+      if (!known.has(track.providerId)) restored.push(track);
+    }
+
+    this.tracks = restored;
+    // The playhead follows the music, not the array: whatever was playing keeps
+    // playing, wherever the restored order puts it.
+    if (current) {
+      const at = this.tracks.findIndex((track) => track.providerId === current.providerId);
+      if (at >= 0) this.index = at;
+    }
+    this.order = null;
+    return true;
+  }
+
+  /** Shuffle, or put the previous order back. @returns {boolean} Now shuffled. */
+  toggleShuffle() {
+    if (this.shuffled) {
+      this.unshuffle();
+      return false;
+    }
+    this.shuffle();
+    return true;
   }
 
   /**

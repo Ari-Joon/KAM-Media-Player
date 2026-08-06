@@ -1872,7 +1872,10 @@ app.post('/api/control/:channelId', rateLimit(120, 60_000), async (request, resp
       case 'previous': await player.previous(); break;
       case 'seek': player.seek(Number(value) || 0); break;
       case 'jump': await player.jumpTo(Number(value) || 0); break;
-      case 'shuffle': player.queue.shuffle(); break;
+      // The bar's chip is a toggle, unlike the slash command which is an
+      // instruction to shuffle. Pressing it a second time puts the previous
+      // order back, which is the only way the light can ever go out.
+      case 'shuffle': player.queue.toggleShuffle(); break;
       case 'loop': player.queue.setLoop(value ?? player.queue.cycleLoop()); break;
       case 'stop': player.stop(); break;
       case 'playFavourite': {

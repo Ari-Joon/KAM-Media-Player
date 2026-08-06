@@ -878,6 +878,11 @@
     align-items: center;
     gap: 7px;
     margin-bottom: 10px;
+    /* Clears the close button, which is absolutely positioned 14px from the
+       right and 26px wide. Applied to this row rather than to the panel, so the
+       list below still uses the full width - padding the panel would indent
+       every shortcut to make room for a button none of them sit near. */
+    padding-right: 34px;
   }
 
   .shortcuts-head h2 { margin: 0; flex: 1 1 auto; }

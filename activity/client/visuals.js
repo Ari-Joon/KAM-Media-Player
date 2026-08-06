@@ -1273,11 +1273,43 @@ export class VinylVisual extends Canvas2DVisual {
       const iw = this.label.naturalWidth || this.label.width || 1;
       const ih = this.label.naturalHeight || this.label.height || 1;
       const side = Math.min(iw, ih);
-      context.drawImage(
+
+      // The whole cover, inscribed, with the gaps mirrored.
+      //
+      // Filling the circle with the artwork cropped it to the middle, so a
+      // sleeve with its title across the top or its artist along the bottom lost
+      // exactly the part worth reading. Inscribing the square instead - corners
+      // touching the circle, so its side is the radius times root two - shows
+      // all of it, and leaves four circular segments empty around the edges.
+      //
+      // Each segment is filled by reflecting the artwork across the edge beside
+      // it. The reflection is continuous with the picture at the join, because a
+      // mirror always is, so the cover appears to bleed outward into the disc
+      // instead of ending at a hard square. The four corners need nothing: with
+      // the corners on the circle there is no area left over between the edges.
+      const square = labelRadius * Math.SQRT2;
+      const half = square / 2;
+      const paint = () => context.drawImage(
         this.label,
         (iw - side) / 2, (ih - side) / 2, side, side,
-        -labelRadius, -labelRadius, labelRadius * 2, labelRadius * 2,
+        -half, -half, square, square,
       );
+
+      // Mirrors first, so the true image lands on top of its own reflections
+      // and no seam can show over it.
+      for (const [dx, dy, sx, sy] of [
+        [0, -square, 1, -1],   // above
+        [0, square, 1, -1],    // below
+        [-square, 0, -1, 1],   // left
+        [square, 0, -1, 1],    // right
+      ]) {
+        context.save();
+        context.translate(dx, dy);
+        context.scale(sx, sy);
+        paint();
+        context.restore();
+      }
+      paint();
       // Darkened toward the rim, so the paper sits under the vinyl rather than
       // floating on top of it.
       const shade = context.createRadialGradient(0, 0, labelRadius * 0.5, 0, 0, labelRadius);

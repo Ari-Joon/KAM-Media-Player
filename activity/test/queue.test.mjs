@@ -286,3 +286,44 @@ console.log('insertAt: 15/15 pass');
   assert.ok(Array.isArray(ending.toJSON().played), 'serialised for the client');
   console.log('play history: 8/8 pass (order, positions, dedupe, end of queue)');
 }
+
+// --- Shuffle is a toggle on the bar ------------------------------------------
+//
+// It could only ever light up before: `shuffled` was set true and nothing set
+// it false, so the chip stayed on for the rest of the session however many
+// times it was pressed. Turning it off has to mean something, which means the
+// order before shuffling has to be kept.
+{
+  const q = new Queue();
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+  q.add(ids.map((providerId) => ({ providerId, title: providerId })));
+
+  assert.equal(q.toggleShuffle(), true, 'first press shuffles');
+  assert.equal(q.shuffled, true);
+
+  assert.equal(q.toggleShuffle(), false, 'second press turns it off');
+  assert.equal(q.shuffled, false);
+  assert.deepEqual(q.tracks.map((t) => t.providerId), ids, 'the original order is back');
+
+  // Tracks added while shuffled keep their place; tracks removed stay removed.
+  q.toggleShuffle();
+  q.add([{ providerId: 'g', title: 'g' }]);
+  q.remove(q.tracks.findIndex((t) => t.providerId === 'c'));
+  q.toggleShuffle();
+  const after = q.tracks.map((t) => t.providerId);
+  assert.ok(!after.includes('c'), 'a removed track is not resurrected');
+  assert.ok(after.includes('g'), 'a track added while shuffled survives');
+  assert.equal(new Set(after).size, after.length, 'no duplicates');
+
+  // Whatever is playing keeps playing across a restore.
+  const q2 = new Queue();
+  q2.add(ids.map((providerId) => ({ providerId, title: providerId })));
+  q2.next(true);
+  q2.next(true);
+  const playing = q2.current().providerId;
+  q2.toggleShuffle();
+  q2.toggleShuffle();
+  assert.equal(q2.current().providerId, playing, 'the playhead follows the music');
+
+  console.log('shuffle toggle: 9/9 pass (restores order, keeps edits, holds the playhead)');
+}
