@@ -1405,79 +1405,42 @@
 
   #queue-list .by { color: var(--trace-dim); font-size: 9px; }
 
-  /* --- Playlist blocks in the queue -------------------------------------- */
+  /* --- Playlist markers in the queue -------------------------------------- */
 
-  #queue-list .group-head {
-    display: flex;
-    align-items: baseline;
-    gap: 7px;
-    padding: 9px 6px 5px;
-    margin-top: 6px;
-    border-top: 1px solid rgba(255, 255, 255, 0.10);
-  }
-
-  /* The connector. A block after the first is joined to the one above it, so a
-     queue of several playlists reads as a sequence rather than as a list that
-     happens to have headings in it. */
-  #queue-list .group-head:not(:first-child) {
-    border-top-color: rgba(255, 210, 26, 0.28);
-  }
-
-  #queue-list .group-number {
-    flex: none;
-    display: inline-grid;
+  /* A stripe in the first column, coloured by which playlist the track came
+     from and numbered by that playlist's place in the play order. Six colours,
+     chosen for separation at a 5px width where hue is all there is to go on.
+     They repeat past six, which is fine: six playlists queued at once is
+     already more than the panel can show. */
+  #queue-list .source-tag {
+    grid-column: 1;
+    justify-self: stretch;
+    align-self: stretch;
+    display: grid;
     place-content: center;
-    min-width: 17px;
-    height: 17px;
-    padding: 0 4px;
-    border-radius: 5px;
-    background: rgba(255, 210, 26, 0.85);
-    color: #1a1608;
-    font-family: var(--ui-font);
-    font-size: 10px;
+    border-radius: 3px;
+    font-size: 8px;
     font-weight: 700;
-  }
-
-  #queue-list .group-name {
-    flex: 1 1 auto;
-    min-width: 0;
+    color: rgba(0, 0, 0, 0.65);
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 600;
   }
 
-  #queue-list .group-owner {
-    flex: none;
-    color: var(--trace-dim);
-    font-size: 10px;
-    max-width: 40%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  #queue-list .from-playlist-1 .source-tag { background: #ffd21a; }
+  #queue-list .from-playlist-2 .source-tag { background: #4dd2ff; }
+  #queue-list .from-playlist-3 .source-tag { background: #7bf1a8; }
+  #queue-list .from-playlist-4 .source-tag { background: #ff8ab5; }
+  #queue-list .from-playlist-5 .source-tag { background: #c39bff; }
+  #queue-list .from-playlist-6 .source-tag { background: #ffab5e; }
 
-  #queue-list .group-count {
-    flex: none;
-    color: var(--trace-dim);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Three rows then this, rather than a scrolling area inside the block: a
-     nested scroller in a 340px panel that is itself scrolling is unpleasant on
-     a trackpad and worse on touch. */
-  #queue-list .group-more {
-    padding: 4px 6px 8px 30px;
-    color: var(--trace);
-    font-size: 11px;
-    cursor: pointer;
-    border-radius: 6px;
-  }
-
-  #queue-list .group-more:hover { color: #ffd21a; background: rgba(255, 255, 255, 0.05); }
+  /* The faintest wash of the same colour across the row, so a run of tracks
+     from one playlist reads as belonging together without drawing a box round
+     them - which is what made an interrupted playlist look broken. */
+  #queue-list .from-playlist-1 { background: rgba(255, 210, 26, 0.07); }
+  #queue-list .from-playlist-2 { background: rgba(77, 210, 255, 0.07); }
+  #queue-list .from-playlist-3 { background: rgba(123, 241, 168, 0.07); }
+  #queue-list .from-playlist-4 { background: rgba(255, 138, 181, 0.07); }
+  #queue-list .from-playlist-5 { background: rgba(195, 155, 255, 0.07); }
+  #queue-list .from-playlist-6 { background: rgba(255, 171, 94, 0.07); }
 
   #playlist-panel .playlist.is-queued { border-color: rgba(255, 210, 26, 0.55); }
 
@@ -1535,7 +1498,12 @@
 
   #queue-list li {
     display: grid;
-    grid-template-columns: 22px 1fr auto auto;
+    /* The first column is the playlist marker, and it is present on every row
+       whether or not the row has one. Sizing the grid per row instead would
+       make the track numbers and titles of tagged and untagged rows sit at
+       different offsets, and a queue with one playlist in it would look like
+       two lists shoved together. */
+    grid-template-columns: 5px 22px 1fr auto auto;
     gap: 8px;
     align-items: center;
     padding: 8px 6px;
@@ -1544,6 +1512,9 @@
     font-size: calc(var(--ui-size) * 0.80);
     cursor: pointer;
   }
+
+  /* An untagged row still occupies the marker column, empty. */
+  #queue-list li.track:not([data-playlist]) .num { grid-column: 2; }
 
   #queue-list li:hover { background: rgba(255, 255, 255, 0.07); }
   #queue-list .num { color: var(--trace-dim); font-variant-numeric: tabular-nums; }

@@ -330,6 +330,24 @@ export class PlaylistPanel {
     const card = document.createElement('section');
     card.className = `playlist ${isPrivate ? 'is-private' : 'is-public'}`;
 
+    // The whole playlist can be dragged into the queue, which is the same thing
+    // "Queue all" does - dropping one and pressing the button must not produce
+    // two different results, so both name the playlist and let the server
+    // expand it.
+    if (entry.tracks.length > 0) {
+      this.context.makeDragSource?.(
+        card,
+        () => ({
+          playlist: {
+            ownerId: entry.user?.id ?? this.viewerId ?? null,
+            slot: entry.slot ?? entry.visibility,
+            name: entry.name,
+          },
+        }),
+        entry.name,
+      );
+    }
+
     const top = document.createElement('div');
     top.className = 'playlist-top';
 
@@ -500,6 +518,11 @@ export class PlaylistPanel {
       }
 
       row.addEventListener('click', () => this.context.enqueue(track));
+      this.context.makeDragSource?.(
+        row,
+        () => [identify(track)],
+        track.title,
+      );
       // Tracks in a playlist get the same menu as tracks anywhere else, so a
       // song can be moved from a public playlist into a private one.
       row.dataset.menuTrack = JSON.stringify({
