@@ -128,6 +128,67 @@ function makeQueueDragSource(element, payload, label) {
   });
 }
 
+/**
+ * Keyboard shortcuts, as data.
+ *
+ * One table drives both the handler and the reference panel. Written as two
+ * lists that had to be kept in step, the panel would eventually describe keys
+ * that no longer do what it says - and a shortcuts sheet that lies is worse
+ * than none, because it is believed.
+ *
+ * Unmodified keys only. Discord's client claims many combinations for itself,
+ * and an Activity that fought it over ctrl-K would lose in a way nobody could
+ * debug from inside the iframe.
+ *
+ * @type {{keys: string[], label: string, run: (t: Transport, event: KeyboardEvent) => void}[]}
+ */
+const SHORTCUTS = [
+  { keys: [' '], label: 'Play or pause', show: 'Space', run: (t) => t.send('toggle') },
+  {
+    keys: ['ArrowLeft'],
+    label: 'Back 5 seconds, or 30 with shift',
+    show: '←',
+    run: (t, event) => t.nudge(event.shiftKey ? -30 : -5),
+  },
+  {
+    keys: ['ArrowRight'],
+    label: 'Forward 5 seconds, or 30 with shift',
+    show: '→',
+    run: (t, event) => t.nudge(event.shiftKey ? 30 : 5),
+  },
+  { keys: ['n'], label: 'Next track', show: 'N', run: (t) => t.send('next') },
+  { keys: ['p'], label: 'Previous track', show: 'P', run: (t) => t.send('previous') },
+  { keys: ['f'], label: 'Favourite this track', show: 'F', run: (t) => t.toggleFavourite() },
+  { keys: ['q'], label: 'Show or hide the queue', show: 'Q', run: (t) => t.elements.queueButton.click() },
+  { keys: ['l'], label: 'Cycle loop mode', show: 'L', run: (t) => t.send('loop') },
+  { keys: ['s'], label: 'Shuffle the queue', show: 'S', run: (t) => t.send('shuffle') },
+  {
+    keys: ['/'],
+    label: 'Search for a track',
+    show: '/',
+    // The key would otherwise be typed into the box it just opened.
+    run: (t, event) => { event.preventDefault(); t.elements.searchButton.click(); },
+  },
+  { keys: ['?'], label: 'Show this list', show: '?', run: (t) => t.toggleShortcuts() },
+  { keys: ['Escape'], label: 'Close any panel', show: 'Esc', run: (t) => t.closeEverything() },
+];
+
+/**
+ * Whether a keystroke belongs to something being typed into.
+ *
+ * A shortcut that fires while someone is naming a playlist would rename it to
+ * fragments and pause the music halfway through the word.
+ *
+ * @param {EventTarget|null} target
+ * @returns {boolean}
+ */
+function isTyping(target) {
+  const element = /** @type {HTMLElement|null} */ (target);
+  if (!element) return false;
+  const tag = element.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable;
+}
+
 /** Format seconds as m:ss. */
 function clock(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -358,6 +419,7 @@ export class Transport {
     });
 
     this.bind();
+    this.bindShortcuts();
   }
 
   /** Attach listeners once. */
@@ -462,6 +524,16 @@ export class Transport {
     // `index.html` older than the JavaScript, and it is the right behaviour for
     // the transport's own controls - but it would mean a missing playlists
     // button taking down the player, the queue and the visualisations with it.
+    // Not in `this.elements`: a missing shortcuts button must not take the
+    // player down with it, for the same reason the playlists button is not.
+    document.getElementById('shortcuts-button')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.toggleShortcuts();
+    });
+    document.getElementById('shortcuts-panel')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
     this.elements.queueClearSelection.addEventListener('click', () => {
       this.queueSelection.clear();
@@ -674,6 +746,76 @@ export class Transport {
     } catch {
       // The poll loop will resynchronise; a failed control press is not fatal.
     }
+  }
+
+  /**
+   * Seek by a relative amount, clamped to the track.
+   *
+   * @param {number} bySec Negative to go back.
+   */
+  nudge(bySec) {
+    if (!(this.durationSec > 0)) return;
+    const from = this.dragging ? this.dragValue : this.lastKnownPosition ?? 0;
+    const to = Math.max(0, Math.min(this.durationSec, from + bySec));
+    this.wake();
+    this.send('seek', to);
+  }
+
+  /** Close every panel and menu this transport owns. */
+  closeEverything() {
+    this.closePanels();
+    this.trackMenu?.close();
+    const sheet = document.getElementById('shortcuts-panel');
+    if (sheet) sheet.hidden = true;
+  }
+
+  /** Show or hide the shortcuts reference. */
+  toggleShortcuts() {
+    const sheet = document.getElementById('shortcuts-panel');
+    if (!sheet) return;
+    if (sheet.hidden && sheet.childElementCount <= 1) this.fillShortcuts(sheet);
+    sheet.hidden = !sheet.hidden;
+  }
+
+  /**
+   * Build the reference from the same table the handler uses.
+   *
+   * @param {HTMLElement} sheet
+   */
+  fillShortcuts(sheet) {
+    const list = sheet.querySelector('dl') ?? document.createElement('dl');
+    list.textContent = '';
+    for (const entry of SHORTCUTS) {
+      const key = document.createElement('dt');
+      key.textContent = entry.show;
+      const what = document.createElement('dd');
+      what.textContent = entry.label;
+      list.append(key, what);
+    }
+    if (!list.parentElement) sheet.append(list);
+  }
+
+  /**
+   * Listen for shortcuts.
+   *
+   * Bound to the document rather than to the transport, because the transport
+   * hides itself when the pointer leaves and a hidden element cannot hold
+   * focus - so shortcuts would stop working exactly when the interface is out
+   * of the way, which is when they are most wanted.
+   */
+  bindShortcuts() {
+    document.addEventListener('keydown', (event) => {
+      if (isTyping(event.target)) return;
+      // Modified keystrokes belong to the browser and to Discord.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const match = SHORTCUTS.find((entry) => entry.keys.includes(event.key));
+      if (!match) return;
+      // Space scrolls the page and arrows move a scrolled panel; neither is
+      // wanted once the key means something here.
+      if (event.key === ' ' || event.key.startsWith('Arrow')) event.preventDefault();
+      match.run(this, event);
+    });
   }
 
   /** Reveal the bar and cancel any pending hide. */
@@ -1627,6 +1769,10 @@ export class Transport {
    * @param {number} positionSec Interpolated playback position.
    */
   setPosition(positionSec) {
+    // Held even while dragging, so a relative seek from the keyboard has
+    // somewhere to start from. It is written before the early return for that
+    // reason - the guard below is about painting, not about knowing.
+    this.lastKnownPosition = positionSec;
     if (this.dragging || this.durationSec <= 0) return;
     const ratio = Math.min(1, Math.max(0, positionSec / this.durationSec));
 
