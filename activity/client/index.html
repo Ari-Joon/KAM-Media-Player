@@ -1548,6 +1548,17 @@
 
   #playlist-panel .playlist.is-queued { border-color: rgba(255, 210, 26, 0.55); }
 
+  /* A flash on arrival from "go to playlist", not a lasting selection: it says
+     "here it is" without putting the panel into a mode to get out of. */
+  #playlist-panel .playlist.revealed {
+    animation: reveal-flash 1.6s ease-out;
+  }
+
+  @keyframes reveal-flash {
+    0%, 40% { box-shadow: 0 0 0 2px rgba(255, 210, 26, 0.75); }
+    100% { box-shadow: 0 0 0 2px rgba(255, 210, 26, 0); }
+  }
+
   #playlist-panel .play-order {
     flex: none;
     display: inline-grid;

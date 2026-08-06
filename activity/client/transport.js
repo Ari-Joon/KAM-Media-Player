@@ -40,7 +40,12 @@ function proxied(url) {
  */
 function menuTrack(track) {
   return JSON.stringify({
-    provider: track.provider, providerId: track.providerId, title: track.title,
+    provider: track.provider,
+    providerId: track.providerId,
+    title: track.title,
+    // Carried so the menu can offer a way back to the playlist a queued track
+    // came from. Only the label and the key, never its contents.
+    ...(track.source ? { source: track.source } : {}),
   });
 }
 

@@ -126,6 +126,19 @@ async function attachScore(player, track, audioPath) {
     player.score = cached;
     player.analysing = false;
     log.debug(`score cache hit: ${track.title}`);
+
+    // A cached score with no lyrics gets them now.
+    //
+    // Transcription was writing its result nowhere for a long time, so every
+    // score cached before that was fixed has no lyrics - and this branch
+    // returns before the lyrics pass, so those tracks could never gain them.
+    // Playing an old favourite showed "No lyrics for this track" forever, while
+    // a track nobody had played before transcribed fine. The audio is already
+    // on disk here, so the retry costs a transcription and no download.
+    if (TRANSCRIBE_LYRICS && !cached.lyrics) {
+      log.info(`no lyrics cached for "${track.title}"; transcribing`);
+      transcribeInto(player, track, audioPath, cachePath);
+    }
     return;
   } catch {
     // Normal for a track nobody has played before.
@@ -175,37 +188,48 @@ async function attachScore(player, track, audioPath) {
       // shared worker this pass blocked the next track's provisional score for
       // its full 10-30 seconds once it had started, and no amount of queue
       // ordering could fix that.
-      lyricsAnalyser.analyse(audioPath, track, null, true)
-        .then(async (withLyrics) => {
-          if (!withLyrics?.lyrics) return;
-
-          // Cached even when the room has moved on. The transcription belongs
-          // to *this* track, not to whatever is playing now, and the cache-hit
-          // branch at the top of this function returns before the lyrics pass -
-          // so a score written without them never gets them again. That is why
-          // every one of the cached scores on disk had none, despite
-          // transcription being enabled the whole time.
-          try {
-            await writeFile(cachePath, JSON.stringify(withLyrics));
-          } catch (error) {
-            console.error('lyrics cache write failed:', error.message);
-          }
-
-          const overall = withLyrics.lyrics.overall;
-          console.log(`lyrics for "${track.title}": ${withLyrics.lyrics.words.length} words, `
-            + `theme ${overall.theme ?? 'none'}, valence ${overall.valence}`);
-
-          // Only the live score is guarded on the track still being current.
-          if (player.queue.current()?.providerId !== track.providerId) return;
-          player.score = withLyrics;
-        })
-        .catch((error) => console.error('lyrics pass failed:', error.message));
+      transcribeInto(player, track, audioPath, cachePath);
     }
   } catch (error) {
     console.error(`analysis failed for "${track.title}":`, error.message);
   } finally {
     player.analysing = false;
   }
+}
+
+/**
+ * Transcribe a track's lyrics and fold them into the cache and the live score.
+ *
+ * Deliberately not awaited by either caller: it takes tens of seconds, and the
+ * point is that it happens while the music is already playing.
+ *
+ * @param {import('./server/player.js').GuildPlayer} player
+ * @param {object} track
+ * @param {string} audioPath
+ * @param {string} cachePath
+ */
+function transcribeInto(player, track, audioPath, cachePath) {
+  lyricsAnalyser.analyse(audioPath, track, null, true)
+    .then(async (withLyrics) => {
+      if (!withLyrics?.lyrics) return;
+
+      // Cached even when the room has moved on. The transcription belongs to
+      // *this* track, not to whatever is playing now.
+      try {
+        await writeFile(cachePath, JSON.stringify(withLyrics));
+      } catch (error) {
+        log.error(`lyrics cache write failed: ${error.message}`);
+      }
+
+      const overall = withLyrics.lyrics.overall;
+      log.info(`lyrics for "${track.title}": ${withLyrics.lyrics.words.length} words, `
+        + `theme ${overall.theme ?? 'none'}, valence ${overall.valence}`);
+
+      // Only the live score is guarded on the track still being current.
+      if (player.queue.current()?.providerId !== track.providerId) return;
+      player.score = withLyrics;
+    })
+    .catch((error) => log.error(`lyrics pass failed: ${error.message}`));
 }
 
 // --- Discord bot ------------------------------------------------------------

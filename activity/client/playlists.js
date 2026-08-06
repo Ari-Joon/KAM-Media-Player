@@ -278,6 +278,33 @@ export class PlaylistPanel {
     }
   }
 
+  /**
+   * Open the panel and bring one playlist into view.
+   *
+   * Any search or member filter in force is cleared first: arriving at a panel
+   * that is still filtered to something else, and finding the playlist you
+   * asked for absent, is worse than not offering the jump at all.
+   *
+   * @param {{id: string, name: string}} source As stamped on a queued track.
+   */
+  async reveal(source) {
+    this.view.query = '';
+    this.view.owner = '';
+    if (this.searchBox) this.searchBox.value = '';
+    if (this.searchClear) this.searchClear.hidden = true;
+    await this.open();
+
+    const card = [...this.panel.querySelectorAll('.playlist')].find(
+      (element) => element.dataset.playlistId === source.id,
+    );
+    if (!card) return;
+    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // A brief flash rather than a lasting selection: the point is to say "here
+    // it is", not to put the panel into a mode that has to be got out of.
+    card.classList.add('revealed');
+    setTimeout(() => card.classList.remove('revealed'), 1600);
+  }
+
   /** Whether one track matches the current search. */
   matches(track) {
     if (!this.view.query) return true;
@@ -367,6 +394,8 @@ export class PlaylistPanel {
     const isPrivate = entry.visibility === 'private';
     const card = document.createElement('section');
     card.className = `playlist ${isPrivate ? 'is-private' : 'is-public'}`;
+    // The key a queued track carries, so "go to playlist" can find this card.
+    card.dataset.playlistId = this.keyFor(entry);
 
     // The whole playlist can be dragged into the queue, which is the same thing
     // "Queue all" does - dropping one and pressing the button must not produce
@@ -721,6 +750,13 @@ export class TrackMenu {
 
     item('Add to queue', () => this.context.enqueue(track));
     item('Play next', () => this.context.playNext(track));
+
+    // A track queued from a playlist can lead back to it. The colour stripe in
+    // the queue says *which* playlist a track came from, and this is the answer
+    // to the obvious next question - "show me the rest of it".
+    if (track.source?.name) {
+      item(`Go to ${track.source.name}`, () => this.context.playlists.reveal(track.source));
+    }
 
     const slots = this.context.playlists.slots;
     if (slots.length === 0) {

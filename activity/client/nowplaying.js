@@ -145,21 +145,11 @@ export class NowPlayingVisual extends Canvas2DVisual {
       context.stroke();
     }
 
-    // Title and artist under the sleeve, in the interface's own font.
-    if (this.track?.title) {
-      const scale = short * 0.036;
-      context.textAlign = 'center';
-      context.fillStyle = 'rgba(255, 255, 255, 0.92)';
-      context.font = `600 ${scale}px "gg sans", Inter, system-ui, sans-serif`;
-      context.fillText(this.track.title, centreX, y + size + scale * 1.9, width * 0.86);
-
-      if (this.track.artist) {
-        context.fillStyle = 'rgba(255, 255, 255, 0.45)';
-        context.font = `${scale * 0.72}px "gg sans", Inter, system-ui, sans-serif`;
-        context.fillText(this.track.artist, centreX, y + size + scale * 3.2, width * 0.8);
-      }
-      context.textAlign = 'left';
-    }
+    // No title or artist here on purpose. The transport bar underneath already
+    // carries both, and printing them again put the same two lines on screen
+    // twice, a few pixels apart and in different sizes - which reads as a
+    // rendering fault rather than as emphasis. The sleeve and the ring are the
+    // whole view.
   }
 }
 
