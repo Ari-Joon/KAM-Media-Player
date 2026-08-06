@@ -181,3 +181,92 @@ console.log('updateDropTarget: 11/11 pass (gap tracking, no-op guard)');
 
   console.log('title marquee: 5/5 pass (a parked title is never masked at its start)');
 }
+
+// --- Touch selection mode ----------------------------------------------------
+// Multi-select was ctrl-click and shift-click only, so on a phone the batched
+// remove could not be reached at all. A long press on a queue row enters a mode
+// where taps select, and the selection bar is the way out.
+//
+// Exercised against the prototype for the same reason the drop arithmetic is:
+// the constructor demands the whole transport markup, and none of this state
+// machine touches it.
+{
+  const { claimQueueLongPress, toggleQueueSelection, clearQueueSelection,
+    updateQueueSelectionBar } = Transport.prototype;
+
+  /** A Transport with just the fields this state machine reads. */
+  const makeSelf = () => ({
+    queueSelection: new Set(),
+    queueAnchor: null,
+    queueTouchSelect: false,
+    queueSignature: 'stale',
+    lastDecks: null,
+    elements: {
+      queueSelectionBar: { hidden: true },
+      queueSelectionCount: { textContent: '' },
+    },
+  });
+
+  /** A DOM row stand-in: `closest` is the only thing the claim uses. */
+  const row = (match) => ({ closest: (selector) => (match ? { dataset: match } : null) });
+
+  // A long press outside the queue must not be claimed - everywhere else it is
+  // the only way to reach "play next" and "add to playlist" on a phone.
+  const elsewhere = makeSelf();
+  assert.equal(claimQueueLongPress.call(elsewhere, row(null)), false,
+    'a long press outside the queue was taken from the track menu');
+  assert.equal(elsewhere.queueTouchSelect, false);
+
+  // A row with no usable position is not a row to select. Without this the mode
+  // would be entered with NaN in the selection, which no track can ever match -
+  // so the bar would offer a Remove that silently removed nothing.
+  assert.equal(claimQueueLongPress.call(makeSelf(), row({ position: 'nonsense' })), false,
+    'an unparseable position entered selection mode anyway');
+
+  const self = makeSelf();
+  assert.equal(claimQueueLongPress.call(self, row({ position: '4' })), true,
+    'a long press on a queue row was not claimed');
+  assert.equal(self.queueTouchSelect, true, 'the long press did not enter selection mode');
+  // The pressed row has to be selected, not merely armed: an empty selection
+  // leaves the bar hidden, and the bar is the only thing that says the mode is
+  // running or offers a way out of it.
+  assert.deepEqual([...self.queueSelection], [4], 'the pressed row was not selected');
+  assert.equal(self.queueAnchor, 4);
+  assert.equal(self.queueSignature, null, 'the queue was not marked for a rebuild');
+
+  // Taps build the selection, and tapping a selected row takes it back out.
+  toggleQueueSelection.call(self, 7);
+  assert.deepEqual([...self.queueSelection].sort((a, b) => a - b), [4, 7]);
+  toggleQueueSelection.call(self, 4);
+  assert.deepEqual([...self.queueSelection], [7], 'tapping a selected row did not deselect it');
+
+  // The bar names the mode. It is the only signal on a touch device that taps
+  // have stopped playing tracks, so counting alone is not enough.
+  updateQueueSelectionBar.call(self);
+  assert.equal(self.elements.queueSelectionBar.hidden, false);
+  assert.match(self.elements.queueSelectionCount.textContent, /tap to add/,
+    'the bar did not say that taps are now selecting');
+
+  // Cancel is the exit.
+  clearQueueSelection.call(self);
+  assert.equal(self.queueTouchSelect, false, 'cancelling left the mode running');
+  assert.equal(self.queueSelection.size, 0);
+
+  // Emptying the selection by any other route ends the mode too. Left on, the
+  // next tap would select instead of playing with nothing on screen saying so.
+  const emptied = makeSelf();
+  emptied.queueTouchSelect = true;
+  updateQueueSelectionBar.call(emptied);
+  assert.equal(emptied.queueTouchSelect, false,
+    'an empty selection left touch mode running with no visible bar');
+  assert.equal(emptied.elements.queueSelectionBar.hidden, true);
+
+  // With a mouse the bar keeps its plain label: ctrl-click selecting does not
+  // change what a plain click does, and saying "tap to add" there would be a lie.
+  const mouse = makeSelf();
+  mouse.queueSelection.add(2);
+  updateQueueSelectionBar.call(mouse);
+  assert.equal(mouse.elements.queueSelectionCount.textContent, '1 selected');
+
+  console.log('queue touch selection: 14/14 pass (long press enters, taps toggle, the bar exits)');
+}

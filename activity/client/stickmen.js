@@ -75,8 +75,184 @@ const DEG = Math.PI / 180;
 const MIN_ARM_SPREAD = 41 * (Math.PI / 180);
 const MIN_LEG_SPREAD = 15 * (Math.PI / 180);
 
+/**
+ * Body proportions, as fractions of a figure's build.
+ *
+ * `drawDancer` had these as locals. They are module constants now because the
+ * head clearance has to know where a hand ends up relative to the head, and a
+ * second copy of the numbers would drift silently: the clearance would go on
+ * defending a head that had moved.
+ */
+const SHOULDER_HALF = 0.20;
+const UPPER_ARM = 0.36;
+const FORE_ARM = 0.34;
+const THIGH = 0.56;
+const SHIN = 0.54;
+const SPINE_LEN = 0.52;
+
+/**
+ * How tall a figure stands, which every on-screen size scales from.
+ *
+ * The trailing 0.42 is the head and neck allowance the figure is drawn with.
+ */
+const BODY_HEIGHT = THIGH + SHIN + SPINE_LEN + 0.42;
+
+/**
+ * The head, in the same units.
+ *
+ * `drawDancer` sizes the head circle at a tenth of the figure's projected
+ * height and places its centre one and a half radii above the chest, so both
+ * fall out of {@link BODY_HEIGHT} directly. The shoulder sits level with the
+ * chest, so the head is `HEAD_RISE` above a shoulder and `SHOULDER_HALF`
+ * inward of it.
+ */
+const HEAD_RADIUS = BODY_HEIGHT * 0.100;
+const HEAD_RISE = HEAD_RADIUS * 1.5;
+
+/**
+ * Lift, as the pose tables author it, becomes an aim azimuth this much larger.
+ *
+ * `drawDancer` scales lift by 1.75 on the way in and `fromLegacy` by a further
+ * 1.5. It matters here because it means lift runs a long way past "out to the
+ * side" - a lift of 34.3 degrees is already a full 90 - and then wraps back
+ * across the body.
+ */
+const ARM_LIFT_TO_AZIMUTH = 1.75 * 1.5;
+
+/**
+ * How far a hand must stay from the head, in body heights.
+ *
+ * A hand's stroke half-width is 0.052 and the head's radius is 0.204, so they
+ * touch at 0.26. This is comfortably past that, because the ask was hands that
+ * *sit beside* the head, not only hands that overlap it.
+ */
+const HEAD_CLEARANCE = 0.45;
+
+/**
+ * How far to open the elbow per body height of shortfall, in radians.
+ *
+ * ## Why the elbow, and not the lift the torso clearance uses
+ *
+ * Horizontal separation from the head works out as
+ * `sqrt(SHOULDER_HALF^2 + 2 SHOULDER_HALF R sin(azimuth) + R^2)`, where `R` is
+ * how far out the hand reaches. That has exactly one maximum in azimuth, at +90
+ * degrees - and the torso clearance already parks arms past it, at a lift of 41
+ * degrees against the 34.3 that makes 90. So there is almost nowhere useful
+ * left to push in lift, and pushing hard enough to matter wraps the azimuth
+ * round and brings the hand back the other side. Measured: repelling lift away
+ * from the head's azimuth took 14.05% of hand-frames to 13.87%, a 1.3%
+ * reduction where 15% was asked for, and it saturated.
+ *
+ * `R` is the other term, and it is the arm's reach. Straightening the elbow
+ * moves the hand away where turning it cannot - which is also what a person
+ * does, since you extend your arm to get your hand clear rather than swinging
+ * it round your own head.
+ *
+ * ## The number
+ *
+ * Tuned by measurement over 180 seconds of a six-figure cast at 60fps, 129,600
+ * hand-frames: count the frames where a hand is level with the head (within a
+ * head radius of its height) *and* horizontally inside {@link HEAD_CLEARANCE}.
+ * Level-with is part of the test on purpose - plain distance to the head centre
+ * is dominated by arms held straight overhead, where the hand is near the
+ * centre but clearly above the crown, which is a pose worth keeping.
+ *
+ * 14.04% before, 11.93% after: a 15.0% reduction. The curve is still steep
+ * there - 70 gives 12.44% and 105 gives 11.76% - so this is a tuned value and
+ * not a plateau. It keeps climbing (9.66% at 600), which is the argument for
+ * stopping at the number that was asked for rather than at the strongest one.
+ *
+ * Re-measure if the arm bone lengths, `MIN_ARM_SPREAD` or `LIMITS.elbow`
+ * change; all three move where the hand ends up.
+ */
+const HEAD_ELBOW_GAIN = 95 * (Math.PI / 180);
+
+/**
+ * Where a hand sits relative to the head, from pose angles alone.
+ *
+ * Inverts what `drawDancer` and {@link limb} do between them, without the
+ * camera or the world transform: both the hand and the head hang off the chest
+ * and are yawed by it together, so their separation is the same in body-local
+ * coordinates as it is in the world.
+ *
+ * @param {{swing: number, lift: number, elbow: number}} arm
+ * @returns {{horizontal: number, level: number}} Distance from the head's
+ *   vertical axis in body heights, and 1 when the hand shares the head's height
+ *   band, falling to 0 a head radius outside it.
+ */
+function handVersusHead(arm) {
+  // `fromLegacy` reads swing as an elevation measured up from straight down,
+  // and maps a fold inversely onto reach.
+  const elevation = -Math.PI / 2 - arm.swing;
+  const azimuth = arm.lift * ARM_LIFT_TO_AZIMUTH;
+  const extend = Math.max(0.42, Math.min(1, 1 - Math.abs(arm.elbow) / (Math.PI * 0.9)));
+  const reach = (UPPER_ARM + FORE_ARM)
+    * (MIN_REACH + (MAX_REACH - MIN_REACH) * extend);
+
+  const radius = reach * Math.cos(elevation);
+  // The shoulder is SHOULDER_HALF outward of the head's axis, so the hand's
+  // offset from that axis is the shoulder's plus the arm's.
+  const across = SHOULDER_HALF + radius * Math.sin(azimuth);
+  const fore = radius * Math.cos(azimuth);
+
+  const gap = Math.abs(reach * Math.sin(elevation) - HEAD_RISE);
+  return {
+    horizontal: Math.hypot(across, fore),
+    // Faded rather than switched, for the reason `anticipate` is shaped: this
+    // scales a force that feeds a spring, and a term that appears between one
+    // frame and the next steps that spring into a visible twitch.
+    level: 1 - Math.min(1, Math.max(0, (gap - HEAD_RADIUS) / HEAD_RADIUS)),
+  };
+}
+
+/**
+ * Push a hand away from the head by straightening the arm.
+ *
+ * The same repulsion as the torso clearance - {@link repel} unchanged, with its
+ * deficit-fraction force and its grace timer - only measured on a real distance
+ * rather than on an angle, and paid out in elbow rather than in lift. See
+ * {@link HEAD_ELBOW_GAIN} for why lift is the wrong currency here.
+ *
+ * @param {{swing: number, lift: number, elbow: number}} target The pose being
+ *   aimed at this frame.
+ * @param {{swing: number, lift: number, elbow: number}} visible The pose
+ *   currently drawn, which is what the timer must judge.
+ * @param {{tuckSec: number}} state Per-arm timer, mutated. Call once per frame.
+ * @param {number} deltaSec
+ * @returns {number} Radians to subtract from the elbow; a smaller fold is a
+ *   longer reach.
+ */
+function clearHead(target, visible, state, deltaSec) {
+  const aimed = handVersusHead(target);
+  const drawn = handVersusHead(visible);
+  // Scaling the *minimum* by how level the hand is means the clearance fades in
+  // and out with the pose while `repel` itself stays untouched - and outside the
+  // head's height band the minimum is zero, which it passes straight through.
+  const pushed = repel(
+    aimed.horizontal, drawn.horizontal, HEAD_CLEARANCE * aimed.level,
+    state, deltaSec, MAX_HEAD_TUCK_SEC,
+  );
+  // `repel` never pushes a positive value downward, so this cannot fold an arm.
+  return (pushed - aimed.horizontal) * HEAD_ELBOW_GAIN;
+}
+
 /** Longest a limb may stay tucked against the body, in seconds. */
 const MAX_TUCK_SEC = 3;
+
+/**
+ * Longest a hand may linger by the head, in seconds.
+ *
+ * Far shorter than {@link MAX_TUCK_SEC}, and it has to be. The torso is
+ * something a limb rests *against*, so a three-second allowance costs nothing
+ * and buys a deliberate fold. The head is something a hand passes *through* on
+ * the way up and back, so an arm is only ever in the head's band for a fraction
+ * of a second at a time - and while the allowance is unspent the repulsion runs
+ * at 6% of the deficit, which measured as no change at all: 20.95% of hand
+ * frames beside the head before, 20.95% after. The clearance simply never fired.
+ *
+ * A third of a second still lets a hand strike the face on a beat and leave.
+ */
+const MAX_HEAD_TUCK_SEC = 0.33;
 
 /**
  * Push a limb away from the torso.
@@ -103,9 +279,10 @@ const MAX_TUCK_SEC = 3;
  * @param {number} minimum Angle below which repulsion applies.
  * @param {{tuckSec: number}} state Per-limb timer, mutated.
  * @param {number} deltaSec
+ * @param {number} [grace] How long a tuck is tolerated, in seconds.
  * @returns {number} The adjusted target.
  */
-function repel(target, visible, minimum, state, deltaSec) {
+function repel(target, visible, minimum, state, deltaSec, grace = MAX_TUCK_SEC) {
   // The timer must judge what is actually on screen, not what the pose asked
   // for. Testing the raw target meant it stayed below the threshold every frame
   // even while the force was successfully holding the limb clear, so the timer
@@ -132,9 +309,9 @@ function repel(target, visible, minimum, state, deltaSec) {
   // Weak during the grace period, so a deliberate tuck - a hand on a microphone,
   // an arm folded - survives for a few seconds. Past the allowance it ramps to
   // full over half a second, and the limb drifts out rather than being ejected.
-  const ramp = state.tuckSec < MAX_TUCK_SEC
+  const ramp = state.tuckSec < grace
     ? 0.06
-    : 0.06 + 1.09 * Math.min(1, (state.tuckSec - MAX_TUCK_SEC) / 0.5);
+    : 0.06 + 1.09 * Math.min(1, (state.tuckSec - grace) / 0.5);
 
   // Overshooting the threshold slightly means the limb settles clear of it
   // rather than oscillating across the boundary.
@@ -2275,6 +2452,12 @@ export class StickMenVisual {
       tuck: {
         arms: [{ tuckSec: 0 }, { tuckSec: 0 }],
         legs: [{ tuckSec: 0 }, { tuckSec: 0 }],
+        // The head clearance keeps its own timers rather than sharing the arms'.
+        // Sharing them couples two unrelated grace periods: a hand held at the
+        // face would spend the allowance that a later arm-across-the-chest pose
+        // needs, and each would cut the other short at a distance from its own
+        // obstacle that it was never measuring.
+        heads: [{ tuckSec: 0 }, { tuckSec: 0 }],
       },
       // The smoothed pose actually drawn. Targets are computed each frame and
       // this chases them, so nothing ever steps and move changes cross-fade.
@@ -3936,13 +4119,17 @@ export class StickMenVisual {
         swing: softClamp(from(target.head.swing, 0) + headExtra.swing, LIMITS.head),
         lift: softClamp(from(target.head.lift, 0) + headExtra.lift, LIMITS.head),
       },
-      arms: target.arms.map((arm, side) => ({
-        swing: softClamp(
+      // A block body rather than the object literal this used to be: the head
+      // clearance needs all three joints of an arm at once, because where a hand
+      // ends up is a function of all three together.
+      arms: target.arms.map((arm, side) => {
+        const swing = softClamp(
           from(arm.swing, REST.armSwing) + armFlourish[side].swing, LIMITS.armSwing,
-        ),
+        );
+
         // Lift is exaggerated harder than the rest: getting arms away from the
         // torso is what makes a pose readable at a distance.
-        lift: softClamp(
+        const lift = softClamp(
           repel(
             REST.armLift + (arm.lift - REST.armLift) * (reach * 1.25)
               + armFlourish[side].lift,
@@ -3950,7 +4137,8 @@ export class StickMenVisual {
             MIN_ARM_SPREAD, dancer.tuck.arms[side], deltaSec,
           ),
           LIMITS.armLift,
-        ),
+        );
+
         // The accent is applied around the rest value rather than added on top,
         // so a large flourish opens the arm as often as it closes it. Purely
         // additive, it only ever bent the elbow further shut.
@@ -3967,12 +4155,27 @@ export class StickMenVisual {
         //
         // Capped the way `bob` is. A bigger gesture is a straighter arm reaching
         // further, which the swing and lift terms above already deliver.
-        elbow: softClamp(
+        const elbow = softClamp(
           REST.elbow + (arm.elbow - REST.elbow) * Math.min(reach, 1.12)
             + armFlourish[side].elbow * 0.45,
           LIMITS.elbow,
-        ),
-      })),
+        );
+
+        // Once per arm per frame: it advances the head clearance's timer. Fed
+        // the pose *after* the torso clearance, because that is the pose that
+        // will actually be drawn - and because the torso rule is what puts some
+        // of these hands next to the head in the first place, by pushing an arm
+        // authored across the chest out to a lift of -41 degrees.
+        const open = clearHead(
+          { swing, lift, elbow },
+          dancer.pose.arms[side],
+          dancer.tuck.heads[side], deltaSec,
+        );
+
+        // Subtracted rather than added: a smaller bend is a longer reach, and
+        // reach is what carries the hand clear of the head.
+        return { swing, lift, elbow: softClamp(elbow - open, LIMITS.elbow) };
+      }),
       legs: target.legs.map((leg, side) => ({
         swing: softClamp(
           from(leg.swing, REST.legSwing) + legFlourish[side].swing, LIMITS.legSwing,
@@ -4045,13 +4248,16 @@ export class StickMenVisual {
     // Taller, with the extra height in the legs and spine rather than in the
     // head - lengthening everything uniformly just scales the figure up, where
     // longer limbs against the same head give a genuinely taller silhouette.
+    //
+    // The proportions are module constants because the head clearance reads them
+    // too; a private copy here would let the two drift apart silently.
     const hipHeight = 1.16 * s;
-    const spineLen = 0.52 * s;
-    const shoulderHalf = 0.20 * s;
-    const upperArm = 0.36 * s;
-    const foreArm = 0.34 * s;
-    const thigh = 0.56 * s;
-    const shin = 0.54 * s;
+    const spineLen = SPINE_LEN * s;
+    const shoulderHalf = SHOULDER_HALF * s;
+    const upperArm = UPPER_ARM * s;
+    const foreArm = FORE_ARM * s;
+    const thigh = THIGH * s;
+    const shin = SHIN * s;
 
     const yaw = dancer.facing;
     const root = [dancer.x + pose.sway * Math.cos(yaw), hipHeight + pose.bob, dancer.z];
@@ -4059,7 +4265,7 @@ export class StickMenVisual {
 
     // How tall this figure is on screen right now, which everything scales from.
     const pRoot = this.project(root, width, height);
-    const worldHeight = thigh + shin + spineLen + 0.42 * s;
+    const worldHeight = BODY_HEIGHT * s;
     const figurePx = worldHeight * pRoot.scale;
     if (!Number.isFinite(figurePx) || figurePx < 4) return;
 

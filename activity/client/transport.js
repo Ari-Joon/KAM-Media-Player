@@ -272,6 +272,21 @@ export class Transport {
     /** Last row touched, so shift-click has something to extend from. */
     this.queueAnchor = null;
     /**
+     * Whether a plain tap on a queue row toggles selection rather than plays.
+     *
+     * Selecting several tracks was ctrl-click and shift-click only, which a
+     * phone has neither of - so the whole feature, and the batched remove it
+     * exists for, was unreachable on the device an Activity is most often
+     * watched on. A long press enters this mode, taps build the selection, and
+     * the selection bar is the way out.
+     *
+     * Deliberately not inferred from `queueSelection.size`: a selection built
+     * with ctrl-click on a desktop must keep its plain-click-plays behaviour,
+     * or a mouse user would find that clicking a track stopped playing it as
+     * soon as anything was selected.
+     */
+    this.queueTouchSelect = false;
+    /**
      * Playlist blocks the viewer has opened out in the queue.
      *
      * Client state, like the visualisation choice: two people looking at the
@@ -420,6 +435,7 @@ export class Transport {
         }
       },
       playlists: this.playlists,
+      claimLongPress: (row) => this.claimQueueLongPress(row),
       notify,
     });
 
@@ -456,6 +472,10 @@ export class Transport {
       }
       panel.hidden = !open;
       queueButton.classList.toggle('active', open);
+      // Closing the panel ends touch selection mode. The only thing that says
+      // the mode is on lives inside the panel, so leaving it running would mean
+      // reopening the queue to find taps silently selecting instead of playing.
+      if (!open && this.queueTouchSelect) this.clearQueueSelection();
     };
     queueButton.addEventListener('click', () => setPanel(panel.hidden));
     close.addEventListener('click', () => setPanel(false));
@@ -562,12 +582,7 @@ export class Transport {
     });
 
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
-    this.elements.queueClearSelection.addEventListener('click', () => {
-      this.queueSelection.clear();
-      this.queueAnchor = null;
-      this.queueSignature = null;
-      if (this.lastDecks) this.renderDecks(this.lastDecks);
-    });
+    this.elements.queueClearSelection.addEventListener('click', () => this.clearQueueSelection());
 
     const playlistsButton = document.getElementById('t-playlists');
     playlistsButton?.addEventListener('click', (event) => {
@@ -2213,6 +2228,10 @@ export class Transport {
       // Marks this as a real track row, which is what the drop measurement
       // counts and what tells it apart from anything else in the list.
       item.className = 'track';
+      // The absolute position, in the DOM, so a long press can identify the row
+      // it landed on without the closure that built it. The gesture arrives from
+      // `TrackMenu`, which knows only the element it was pressed over.
+      item.dataset.position = String(track.position);
 
       if (track.source) {
         const place = order.get(track.source.id) ?? 1;
@@ -2316,6 +2335,13 @@ export class Transport {
       if (this.queueSelection.has(track.position)) item.classList.add('selected');
 
       item.addEventListener('click', (event) => {
+        // In touch selection mode a plain tap is the selection gesture, so it
+        // comes before everything else - including the modifier branches, which
+        // a touch device cannot produce anyway.
+        if (this.queueTouchSelect) {
+          this.toggleQueueSelection(track.position);
+          return;
+        }
         if (event.shiftKey && this.queueAnchor !== null) {
           const positions = queue.upcoming.map((other) => other.position);
           const from = positions.indexOf(this.queueAnchor);
@@ -2331,14 +2357,7 @@ export class Transport {
           }
         }
         if (event.ctrlKey || event.metaKey) {
-          if (this.queueSelection.has(track.position)) {
-            this.queueSelection.delete(track.position);
-          } else {
-            this.queueSelection.add(track.position);
-          }
-          this.queueAnchor = track.position;
-          this.queueSignature = null;
-          this.renderDecks(this.lastDecks);
+          this.toggleQueueSelection(track.position);
           return;
         }
         // A plain click with a selection open clears it rather than jumping:
@@ -2361,19 +2380,93 @@ export class Transport {
   }
 
   /**
+   * Take a long press on a queue row as "start selecting".
+   *
+   * Offered every long press by {@link TrackMenu}, which owns the only
+   * long-press timer in the app - a second one here would fire on the same
+   * press and the track menu would open on top of the selection.
+   *
+   * Only queue rows are claimed. Everywhere else the long press stays the way
+   * to reach "play next" and "add to playlist", which on a phone is the only
+   * way to reach them at all; and inside the queue the same menu is still one
+   * press away once the mode has been left.
+   *
+   * @param {HTMLElement} row
+   * @returns {boolean} True if the gesture was taken.
+   */
+  claimQueueLongPress(row) {
+    const item = row.closest?.('#queue-list li[data-position]');
+    if (!item) return false;
+    const position = Number(item.dataset.position);
+    if (!Number.isFinite(position)) return false;
+
+    // The pressed row is the first selection. Entering an empty selection mode
+    // would leave the bar hidden, and the bar is the only thing that says the
+    // mode is on or offers a way out of it.
+    this.queueTouchSelect = true;
+    this.queueSelection.add(position);
+    this.queueAnchor = position;
+    this.queueSignature = null;
+    if (this.lastDecks) this.renderDecks(this.lastDecks);
+    return true;
+  }
+
+  /**
+   * Add or remove one position, from whichever gesture asked.
+   *
+   * Shared by ctrl-click and by a tap in touch selection mode so the two cannot
+   * drift apart - a selection that behaved differently by input device would be
+   * worse than one that only worked with a mouse.
+   *
+   * @param {number} position
+   */
+  toggleQueueSelection(position) {
+    if (this.queueSelection.has(position)) {
+      this.queueSelection.delete(position);
+    } else {
+      this.queueSelection.add(position);
+    }
+    this.queueAnchor = position;
+    this.queueSignature = null;
+    if (this.lastDecks) this.renderDecks(this.lastDecks);
+  }
+
+  /** Drop the selection and leave touch selection mode. */
+  clearQueueSelection() {
+    this.queueSelection.clear();
+    this.queueAnchor = null;
+    this.queueTouchSelect = false;
+    this.queueSignature = null;
+    if (this.lastDecks) this.renderDecks(this.lastDecks);
+  }
+
+  /**
    * Show or hide the bar that acts on a selection.
    *
    * Only present while something is selected. A permanent "remove selected"
    * button that does nothing most of the time is furniture.
+   *
+   * On touch it is doing a second job: it is the only indication that taps have
+   * stopped playing tracks and started selecting them, and its Cancel is the
+   * way back. So the label says which mode is running rather than only counting
+   * - a bar that appears identically for both leaves a phone user with no way
+   * to tell whether the next tap will play something.
    */
   updateQueueSelectionBar() {
     const bar = this.elements.queueSelectionBar;
     if (!bar) return;
     const count = this.queueSelection.size;
     bar.hidden = count === 0;
-    if (count === 0) return;
-    this.elements.queueSelectionCount.textContent =
-      `${count} selected`;
+    // Whatever emptied the selection also ends the mode. Left on, the next tap
+    // would silently select instead of playing, with nothing on screen saying
+    // so - the queue would simply appear to have stopped working.
+    if (count === 0) {
+      this.queueTouchSelect = false;
+      return;
+    }
+    this.elements.queueSelectionCount.textContent = this.queueTouchSelect
+      ? `${count} selected · tap to add`
+      : `${count} selected`;
   }
 
   /** Remove every selected track in one request. */
@@ -2384,6 +2477,7 @@ export class Transport {
     // and leaving them lit through the round trip looks like a failure.
     this.queueSelection.clear();
     this.queueAnchor = null;
+    this.queueTouchSelect = false;
     this.queueSignature = null;
     await this.send('removeTracks', { deck: this.viewIndex, positions });
   }

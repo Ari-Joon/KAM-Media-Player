@@ -620,6 +620,11 @@ export class TrackMenu {
    * @param {(track: object) => Promise<void>} context.playNext Insert next.
    * @param {PlaylistPanel} context.playlists
    * @param {(message: string) => void} context.notify
+   * @param {((row: HTMLElement) => boolean)|undefined} [context.claimLongPress]
+   *   Offered every long press before the menu opens; return true to take it.
+   *   A second long-press timer somewhere else would not work - both would fire
+   *   on the same press and the menu would open over whatever the other one
+   *   did - so a list that wants the gesture for itself asks for it here.
    */
   constructor(context) {
     this.context = context;
@@ -661,7 +666,13 @@ export class TrackMenu {
         // The tap that ends this press must not also queue the track, so the
         // next click is swallowed. Without it a long press opens the menu and
         // plays the song underneath it at the same time.
+        //
+        // Set before the press is offered anywhere, because it is just as true
+        // of a list that takes the gesture for itself: the queue's selection
+        // mode would otherwise be entered by the press and immediately have the
+        // row toggled straight back out by the tap that ended it.
         this.swallowNextClick = true;
+        if (this.context.claimLongPress?.(row)) return;
         this.openFor(row, startedAt.x, startedAt.y);
       }, 500);
     }, { passive: true });

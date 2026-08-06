@@ -683,5 +683,96 @@ for (const shot of SHOTS) {
     `shot "${shot.name}" looks down ${worst.toFixed(0)} degrees at the top of its drift`);
 }
 
+// --- Hand-to-head clearance -------------------------------------------------
+// A hand must not sit level with, and beside, the figure's own head - it merges
+// with the head circle and the figure loses the one feature that says which way
+// it is facing.
+//
+// The kinematics are recomputed here from the pose rather than read out of the
+// renderer, for the same reason the camera basis above is: `drawDancer` keeps
+// its joint positions in locals, and a clearance that silently stopped being
+// applied would leave every other assertion in this file perfectly green.
+//
+// Measured over 180 seconds of a six-figure cast at 60fps (129,600 hand-frames)
+// the rate is 14.04% with the clearance disabled and 11.93% with it. This runs
+// a shorter track to stay quick; 13% sits between the two and so fails outright
+// if the clearance is removed, without being a tripwire on pose tweaks.
+{
+  const DEG = Math.PI / 180;
+  // Proportions and reach limits as `stickmen.js` defines them.
+  const SHOULDER_HALF = 0.20;
+  const SPAN = 0.36 + 0.34;
+  const BODY_HEIGHT = 0.56 + 0.54 + 0.52 + 0.42;
+  const HEAD_RADIUS = BODY_HEIGHT * 0.100;
+  const HEAD_RISE = HEAD_RADIUS * 1.5;
+
+  const rotX = ([x, y, z], a) => [x, y * Math.cos(a) - z * Math.sin(a),
+    y * Math.sin(a) + z * Math.cos(a)];
+  const rotZ = ([x, y, z], a) => [x * Math.cos(a) - y * Math.sin(a),
+    x * Math.sin(a) + y * Math.cos(a), z];
+
+  const besideHead = (pose, side) => {
+    const sign = side === 0 ? 1 : -1;
+    const arm = pose.arms[side];
+    const elevation = -Math.PI / 2 - arm.swing;
+    const azimuth = arm.lift * 1.75 * sign * 1.5;
+    const extend = Math.max(0.42, Math.min(1, 1 - Math.abs(arm.elbow) / (Math.PI * 0.9)));
+    const reach = SPAN * (0.42 + (0.98 - 0.42) * extend);
+    const radius = reach * Math.cos(elevation);
+    const hand = [sign * SHOULDER_HALF + Math.sin(azimuth) * radius,
+      reach * Math.sin(elevation), Math.cos(azimuth) * radius];
+    const head = rotZ(rotX([0, HEAD_RISE, 0], pose.head.swing), pose.head.lift);
+    return Math.abs(hand[1] - head[1]) < HEAD_RADIUS
+      && Math.hypot(hand[0] - head[0], hand[2] - head[2]) < 0.45;
+  };
+
+  const frames = 1800;
+  const clearanceScore = {
+    analysis: { is_partial: false, analysed_duration_sec: 60 },
+    timing: { tempo_bpm: 120, meter: 4, beats: [0] },
+    lanes: {
+      fps: 30,
+      frame_count: frames,
+      energy: Array.from({ length: frames }, (_, i) => 0.35 + 0.4 * Math.abs(Math.sin(i / 300))),
+      punch: Array.from({ length: frames }, (_, i) => 0.3 + 0.4 * Math.abs(Math.sin(i / 150))),
+    },
+    sections: Array.from({ length: 3 }, (_, i) => ({
+      index: i,
+      start_sec: i * 20,
+      end_sec: (i + 1) * 20,
+      energy_mean: 0.4 + i * 0.15,
+      brightness_mean: 0.35 + i * 0.15,
+    })),
+    choreography: { sections: Array.from({ length: 3 }, () => ({ routine: null })) },
+  };
+
+  const clearanceVisual = new StickMenVisual(canvas, 2);
+  clearanceVisual.setCount(6);
+
+  let handFrames = 0;
+  let beside = 0;
+  for (let frame = 0; frame < 60 * 60; frame++) {
+    fakeNow += 1000 / 60;
+    clearanceVisual.render(clearanceScore, frame / 60);
+    for (const dancer of clearanceVisual.dancers) {
+      for (const side of [0, 1]) {
+        handFrames += 1;
+        if (besideHead(dancer.pose, side)) beside += 1;
+      }
+    }
+  }
+
+  const rate = (beside / handFrames) * 100;
+  assert.ok(handFrames > 40000, `too few hand-frames sampled (${handFrames})`);
+  assert.ok(rate < 13,
+    `hands sat beside the head on ${rate.toFixed(2)}% of frames; the clearance `
+    + 'is not being applied');
+  // The clearance must not become a ban. Hands genuinely pass the head, and a
+  // rate near zero would mean raised-arm poses had been flattened out entirely.
+  assert.ok(rate > 5,
+    `hands almost never reach the head (${rate.toFixed(2)}%); the clearance has `
+    + 'stopped being a repulsion and started being a clamp');
+}
+
 performance.now = realNow;
-console.log('StickMenVisual: 60/60 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops)');
+console.log('StickMenVisual: 62/62 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops, head clearance)');

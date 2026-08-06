@@ -2055,7 +2055,11 @@
       <button id="queue-remove-selected">Remove</button>
       <button id="queue-clear-selection">Cancel</button>
     </div>
-    <p class="panel-note queue-hint">Ctrl-click to select, shift-click for a range.</p>
+    <!-- Both routes, because the panel is used on both. The touch half was
+         missing and the gesture is not guessable: a long press elsewhere in the
+         app opens the track menu, so there is nothing to suggest it does
+         something else here. -->
+    <p class="panel-note queue-hint">Ctrl-click to select, shift-click for a range. On touch, press and hold a track.</p>
     <ol id="queue-list"></ol>
   </aside>
 
