@@ -538,6 +538,10 @@ export class Transport {
     document.getElementById('shortcuts-panel')?.addEventListener('click', (event) => {
       event.stopPropagation();
     });
+    document.getElementById('shortcuts-close')?.addEventListener('click', () => {
+      const sheet = document.getElementById('shortcuts-panel');
+      if (sheet) sheet.hidden = true;
+    });
 
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
     this.elements.queueClearSelection.addEventListener('click', () => {
@@ -578,7 +582,15 @@ export class Transport {
       if (!isFavouriteDrag(event)) return;
       // Both of these are required for a drop to be accepted at all.
       event.preventDefault();
-      event.dataTransfer.dropEffect = 'copy';
+      // The effect has to match what the drag declared. A row being reordered
+      // sets `effectAllowed = 'move'`, and answering 'copy' to that is a
+      // mismatch the browser resolves by refusing the drop outright - so
+      // dragging a queue row did nothing at all, silently, while dragging a
+      // favourite into the same panel worked.
+      const reordering = Array.prototype.includes.call(
+        event.dataTransfer.types ?? [], 'application/x-kam-reorder',
+      );
+      event.dataTransfer.dropEffect = reordering ? 'move' : 'copy';
       this.elements.panel.classList.add('drop-target');
       this.updateDropTarget(event.clientY);
     });
@@ -2000,7 +2012,29 @@ export class Transport {
       this.queuePositions.push(track.position);
     });
 
+    this.updateQueueCount(queue);
     this.updateQueueSelectionBar();
+  }
+
+  /**
+   * How much is left, and how long a loop lasts.
+   *
+   * The loop total is shown only while loop-queue is on, because that is the
+   * only time it means anything: with looping off, the queue does not come
+   * round again and a total is just a second number to read past.
+   *
+   * @param {object} queue
+   */
+  updateQueueCount(queue) {
+    const label = document.getElementById('queue-count');
+    if (!label) return;
+
+    const left = queue.upcoming?.length ?? 0;
+    const parts = [`${left} left`];
+    if (queue.loop === 'queue' && queue.total > 0) {
+      parts.push(`${queue.total} in the loop`);
+    }
+    label.textContent = left === 0 && queue.loop !== 'queue' ? '' : parts.join(' · ');
   }
 
   /**

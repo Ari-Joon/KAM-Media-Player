@@ -1304,6 +1304,27 @@ function pruneAvatarCache() {
  * @param {string|null} userId
  * @returns {Promise<string|null>}
  */
+/**
+ * An avatar for somebody known only by name.
+ *
+ * The last resort for favourites saved before user ids were recorded. The
+ * contributor list is built from the same store and does carry ids, so a name
+ * that appears in both can borrow the picture - which is why the folder list
+ * always looked right while the rows beside it did not.
+ *
+ * @param {string} guildId
+ * @param {string|undefined} username
+ * @returns {Promise<string|null>}
+ */
+async function avatarByName(guildId, username) {
+  if (!username) return null;
+  const match = favourites.contributors(guildId).find(
+    (person) => person.username === username && person.id,
+  );
+  if (!match) return null;
+  return (await resolveAvatar(match.id)) ?? avatarUrl(match);
+}
+
 async function resolveAvatar(userId) {
   if (!userId) return null;
 
@@ -1339,7 +1360,17 @@ app.get('/api/favourites/:guildId', async (request, response) => {
       latestAt: Favourites.latestAt(entry),
       addedBy: await Promise.all((entry.addedBy ?? []).map(async (who) => ({
         ...who,
-        avatarUrl: (await resolveAvatar(who.id)) ?? avatarUrl(who),
+        // By id first, then by the stored hash, then by name against the
+        // contributor list.
+        //
+        // The third step exists because favourites saved before user ids were
+        // recorded carry a username and nothing else - `resolveAvatar` has no
+        // id to fetch and `avatarUrl` has none to derive a default from, so
+        // every one of those rows fell through to an initial badge while the
+        // *same person* showed a real picture in the folder list beside it.
+        avatarUrl: (await resolveAvatar(who.id))
+          ?? avatarUrl(who)
+          ?? await avatarByName(guildId, who.username),
       }))),
     })),
   );

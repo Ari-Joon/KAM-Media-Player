@@ -500,7 +500,7 @@
   @media (hover: none) {
     #transport button { min-width: 42px; min-height: 42px; }
     #transport .chip { min-height: 42px; padding: 10px 13px; }
-    #queue-close, #fav-close, #search-close, #playlist-close {
+    #queue-close, #fav-close, #search-close, #playlist-close, #shortcuts-close {
       width: 38px; height: 38px; font-size: 20px;
     }
     #queue-list .tools button { width: 32px; height: 32px; font-size: 13px; }
@@ -984,7 +984,7 @@
      box in the wrong corner. A close control is the one thing that must look
      the same everywhere, and one rule means the next panel cannot get it
      wrong. */
-  #search-close, #fav-close, #playlist-close {
+  #search-close, #fav-close, #playlist-close, #shortcuts-close {
     position: absolute;
     top: 14px;
     right: 14px;
@@ -1000,7 +1000,7 @@
     cursor: pointer;
   }
 
-  #search-close:hover, #fav-close:hover, #playlist-close:hover {
+  #search-close:hover, #fav-close:hover, #playlist-close:hover, #shortcuts-close:hover {
     color: #ffd21a;
     border-color: rgba(255, 210, 26, 0.5);
   }
@@ -1460,6 +1460,14 @@
     box-shadow: inset 0 0 0 1px rgba(255, 210, 26, 0.4);
   }
 
+  #queue-count {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--trace-dim);
+  }
+
   #queue-panel h2 {
     margin: 0 0 14px;
     font-family: var(--ui-font);
@@ -1912,7 +1920,7 @@
 
   <aside id="queue-panel" hidden>
     <button id="queue-close" title="Close (Esc)" aria-label="Close">&times;</button>
-    <h2>Queue</h2>
+    <h2>Queue <span id="queue-count"></span></h2>
     <div class="deck-actions">
       <button id="deck-shuffle">shuffle</button>
     </div>
@@ -1936,6 +1944,7 @@
        covers the transport or the panels down the right-hand edge. Its rows are
        built from the same table the key handler reads. -->
   <aside id="shortcuts-panel" hidden aria-label="Keyboard shortcuts">
+    <button id="shortcuts-close" title="Close (Esc)" aria-label="Close">&times;</button>
     <h2>Shortcuts</h2>
   </aside>
   <button id="shortcuts-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
