@@ -236,3 +236,53 @@ assert.equal(titles(q), 'T8,T1,T2,T3');
 assert.equal(q.previous().title, 'T2', 'history followed the insertion');
 assert.equal(q.previous().title, 'T1', 'and stays correct further back');
 console.log('insertAt: 15/15 pass');
+
+// --- Play history ------------------------------------------------------------
+//
+// Read from the play history rather than by walking back from the index, and
+// the difference only shows after a jump: what was *played* and what sits above
+// the playhead are then two different lists, and only the first is what
+// "recently played" means.
+{
+  const q = new Queue();
+  q.add([
+    { providerId: 'a', title: 'A' }, { providerId: 'b', title: 'B' },
+    { providerId: 'c', title: 'C' }, { providerId: 'd', title: 'D' },
+  ]);
+
+  assert.deepEqual(q.recentlyPlayed().map((t) => t.providerId), [],
+    'nothing has been played yet');
+
+  q.next(true);            // A -> B
+  q.next(true);            // B -> C
+  assert.deepEqual(q.recentlyPlayed().map((t) => t.providerId), ['b', 'a'],
+    'most recent first');
+
+  q.jumpTo(0);                // back to A, which is a play of A
+  assert.equal(q.recentlyPlayed()[0].providerId, 'c',
+    'the track jumped away from is the most recent');
+
+  // Positions come back with each entry, or an entry could not be jumped to.
+  assert.equal(q.recentlyPlayed()[0].position, 2);
+
+  // Capped, and never the same track twice - a loop would otherwise fill the
+  // whole list with one song.
+  const looped = new Queue();
+  looped.add([{ providerId: 'x', title: 'X' }, { providerId: 'y', title: 'Y' }]);
+  for (let i = 0; i < 6; i += 1) looped.next(true);
+  const ids = looped.recentlyPlayed().map((t) => t.providerId);
+  assert.ok(ids.length <= 3);
+  assert.equal(new Set(ids).size, ids.length, 'no duplicates');
+
+  // The end of the queue is exactly when history matters most, so the track
+  // that just finished has to be in it.
+  const ending = new Queue();
+  ending.add([{ providerId: 'last', title: 'Last' }]);
+  ending.next(true);
+  assert.equal(ending.ended, true);
+  assert.deepEqual(ending.recentlyPlayed().map((t) => t.providerId), ['last'],
+    'the finished track is reachable once the queue has ended');
+
+  assert.ok(Array.isArray(ending.toJSON().played), 'serialised for the client');
+  console.log('play history: 8/8 pass (order, positions, dedupe, end of queue)');
+}

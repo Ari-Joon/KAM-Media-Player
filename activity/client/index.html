@@ -1517,6 +1517,13 @@
   #queue-list li.track:not([data-playlist]) .num { grid-column: 2; }
 
   #queue-list li:hover { background: rgba(255, 255, 255, 0.07); }
+
+  /* Already played: present but clearly behind the playhead. Dimmed rather than
+     hidden, because the whole reason it is here is to be clicked. */
+  #queue-list li.played { opacity: 0.42; }
+  #queue-list li.played:hover { opacity: 0.85; background: rgba(255, 255, 255, 0.07); }
+  #queue-list li.played .name { text-decoration: none; }
+  #queue-list li.played .num { color: var(--trace); }
   #queue-list .num { color: var(--trace-dim); font-variant-numeric: tabular-nums; }
   #queue-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #queue-list .time { color: var(--trace-dim); font-variant-numeric: tabular-nums; }

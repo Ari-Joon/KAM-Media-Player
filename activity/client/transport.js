@@ -1784,6 +1784,7 @@ export class Transport {
     // same length, so a position-only signature never changed and the panel
     // silently failed to redraw.
     const signature = `${this.viewIndex}:${queue.total}:${queue.index}:`
+      + `${(queue.played ?? []).map((track) => track.position).join('.')}:`
       + queue.upcoming.map(
         (track) => `${track.position}|${track.providerId}|${track.source?.id ?? ''}`,
       ).join(',')
@@ -1831,6 +1832,17 @@ export class Transport {
     }
     this.playlists?.setQueued(order);
 
+    // Played tracks, above the upcoming ones and dimmed. Kept short on purpose:
+    // this is "what was that last one", not a listening history, and a long
+    // list of things already heard would push the actual queue off the screen.
+    //
+    // Rendered before the rows but excluded from `queuePositions`, so a drop
+    // can never be aimed into the past - the gap arithmetic addresses upcoming
+    // tracks only.
+    for (const track of (queue.played ?? []).slice().reverse()) {
+      list.append(this.playedRow(track));
+    }
+
     this.queuePositions = [];
     queue.upcoming.forEach((track, index) => {
       list.append(this.queueRow(track, index, queue, order));
@@ -1838,6 +1850,42 @@ export class Transport {
     });
 
     this.updateQueueSelectionBar();
+  }
+
+  /**
+   * A track that has already played.
+   *
+   * Clickable, because the entire point is being able to go back to it - and it
+   * is the only way back once the queue has ended. Not draggable and not
+   * selectable: those act on the upcoming queue, and offering them here would
+   * invite reordering the past.
+   *
+   * @param {object} track
+   * @returns {HTMLElement}
+   */
+  playedRow(track) {
+    const item = document.createElement('li');
+    item.className = 'played';
+
+    const glyph = document.createElement('span');
+    glyph.className = 'num';
+    glyph.textContent = '↺';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = track.title;
+
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = clock(track.durationSec);
+
+    item.append(glyph, name, time);
+    item.title = `Play ${track.title} again`;
+    item.dataset.menuTrack = menuTrack(track);
+    item.addEventListener('click', () => this.send('jumpDeck', {
+      deck: this.viewIndex, position: track.position,
+    }));
+    return item;
   }
 
   /**

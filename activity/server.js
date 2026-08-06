@@ -996,8 +996,19 @@ app.post('/api/token', async (request, response) => {
  */
 app.get('/api/now-playing/:channelId', (request, response) => {
   const player = findPlayerByChannel(request.params.channelId);
-  if (!player?.queue.current()) {
-    return response.status(404).json({ error: 'Nothing playing.' });
+  // No player at all is genuinely nothing: the bot is not in this channel.
+  if (!player) return response.status(404).json({ error: 'Nothing playing.' });
+
+  // A player whose queue has run out still answers, with a snapshot carrying a
+  // null track and the play history. It used to 404 the moment the last track
+  // finished, which took the whole transport with it - the queue vanished, the
+  // previous and play buttons went with it, and there was no way back to the
+  // song that had just been playing except to search for it again.
+  if (!player.queue.current()) {
+    const snapshot = player.snapshot();
+    snapshot.track = null;
+    snapshot.playing = false;
+    return response.json(snapshot);
   }
 
   // The star, filled in for whoever is asking.

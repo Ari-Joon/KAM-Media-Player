@@ -303,6 +303,45 @@ export class Queue {
    * @param {number} [limit] Maximum upcoming tracks to include.
    * @returns {object}
    */
+  /**
+   * The tracks already played, most recent first.
+   *
+   * Read from `this.history`, which `previous()` already maintains: it is the
+   * order tracks were actually *played* in, which after a jump or a shuffle is
+   * not the order they sit in. Walking backwards from `index` instead would
+   * report whatever happens to be above the playhead, which is a different
+   * question and usually the wrong answer.
+   *
+   * Positions are kept so an entry can be jumped straight back to. A separate
+   * log of descriptors would have to be re-resolved to be playable and would
+   * drift from the queue the moment anything was removed.
+   *
+   * @param {number} limit
+   * @returns {object[]}
+   */
+  recentlyPlayed(limit = 3) {
+    const played = [];
+    const seen = new Set();
+    // When the queue has ended the last track is behind the playhead rather
+    // than at it, so it belongs in the history - and that is precisely the
+    // state where reaching back to replay something matters most.
+    const positions = this.ended && this.index >= 0
+      ? [...this.history, this.index]
+      : [...this.history];
+
+    for (let i = positions.length - 1; i >= 0 && played.length < limit; i -= 1) {
+      const position = positions[i];
+      // A loop or a jump can revisit the same track; showing it three times
+      // would fill the whole list with one song.
+      if (seen.has(position)) continue;
+      const track = this.tracks[position];
+      if (!track) continue;
+      seen.add(position);
+      played.push({ position, ...track });
+    }
+    return played;
+  }
+
   toJSON(limit = 25) {
     return {
       current: this.current(),
@@ -310,6 +349,16 @@ export class Queue {
       total: this.tracks.length,
       loop: this.loop,
       shuffled: this.shuffled,
+      ended: this.ended,
+      played: this.recentlyPlayed().map((track) => ({
+        position: track.position,
+        providerId: track.providerId,
+        provider: track.provider,
+        title: track.title,
+        artist: track.artist ?? null,
+        durationSec: track.durationSec ?? 0,
+        source: track.source ?? null,
+      })),
       upcoming: this.upcoming().slice(0, limit).map((track, offset) => ({
         position: this.index + 1 + offset,
         // Identity is included so the client can tell a reorder from a change of

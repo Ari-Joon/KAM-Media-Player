@@ -656,8 +656,23 @@ async function main() {
         // Any state at all means something is playing, so clear the idle
         // message unconditionally - it previously survived until a track change,
         // and lingered over working visuals.
-        setStatus('');
         document.getElementById('transport').hidden = false;
+
+        // The queue has run out but the player is still here. The transport
+        // stays, holding the play history, so the track that just finished is
+        // one click away instead of needing to be searched for again.
+        if (!state.track) {
+          document.body.classList.add('idle-transport');
+          clock.pause();
+          playing = false;
+          setStatus('');
+          setNotice('');
+          transport.update(state, 0);
+          currentTrackId = null;
+          return;
+        }
+
+        setStatus('');
         document.body.classList.remove('idle-transport');
 
         if (state.track?.providerId !== currentTrackId) {
