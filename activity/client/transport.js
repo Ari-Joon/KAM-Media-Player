@@ -1846,7 +1846,22 @@ export class Transport {
     this.elements.loopLabel.textContent = loopState.label;
 
     this.elements.shuffle.classList.toggle('active', queue.shuffled);
-    this.elements.queueLabel.textContent = String(queue.total);
+
+    // The chip counts what is *left*, and grows to say how long the loop is
+    // when there is a loop. It used to show `queue.total`, which meant the bar
+    // and the panel answered the same question with two different numbers -
+    // the panel counting what is coming and the chip counting everything ever
+    // queued, including tracks already played.
+    //
+    // Widened by its own content rather than by a fixed size, so the second
+    // number costs nothing on the bar until looping is actually on.
+    const left = queue.upcoming?.length ?? Math.max(0, queue.total - queue.index - 1);
+    this.elements.queueLabel.textContent = queue.loop === 'queue' && queue.total > 0
+      ? `${left}/${queue.total}`
+      : String(left);
+    this.elements.queueButton.title = queue.loop === 'queue'
+      ? `${left} left of ${queue.total} in the loop`
+      : `${left} track${left === 1 ? '' : 's'} queued`;
     if (typeof state.favourited === 'boolean') this.setFavourited(state.favourited);
 
     if (!this.dragging) {
