@@ -544,6 +544,23 @@ export class Transport {
       if (sheet) sheet.hidden = true;
     });
 
+    // Bulk pinning. The list is rebuilt afterwards rather than each pin being
+    // toggled in place: the pins are drawn from the stored set, so redrawing
+    // from it is the one way they cannot end up disagreeing with it.
+    const bulk = (keys) => {
+      this.setPinned(keys);
+      const sheet = document.getElementById('shortcuts-panel');
+      if (sheet) this.fillShortcuts(sheet);
+    };
+    document.getElementById('shortcuts-all')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      bulk(SHORTCUTS.map((entry) => entry.keys[0]));
+    });
+    document.getElementById('shortcuts-none')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      bulk([]);
+    });
+
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
     this.elements.queueClearSelection.addEventListener('click', () => {
       this.queueSelection.clear();

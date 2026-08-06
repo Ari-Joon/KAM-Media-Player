@@ -871,6 +871,50 @@
   /* No keyboard, so no hints. */
   @media (hover: none) { #shortcut-hints { display: none; } }
 
+  /* The heading and the two bulk controls share a line, so "All" and "None"
+     read as acting on the list below them rather than on the panel. */
+  .shortcuts-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 10px;
+  }
+
+  .shortcuts-head h2 { margin: 0; flex: 1 1 auto; }
+
+  #shortcuts-panel .bulk {
+    flex: none;
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 3px 9px;
+    cursor: pointer;
+    font-family: var(--ui-font);
+    font-size: calc(9px * var(--ui-scale));
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Green for the additive one and red for the clearing one, and the words as
+     well as the colour - a control told apart only by hue is no control at all
+     to anyone who cannot separate these two, which is the most common form of
+     colour blindness there is. */
+  #shortcuts-panel .bulk.all {
+    color: #7bf1a8;
+    border-color: rgba(123, 241, 168, 0.45);
+    background: rgba(123, 241, 168, 0.12);
+  }
+
+  #shortcuts-panel .bulk.all:hover { background: rgba(123, 241, 168, 0.24); }
+
+  #shortcuts-panel .bulk.none {
+    color: #ff8a8a;
+    border-color: rgba(255, 138, 138, 0.45);
+    background: rgba(255, 138, 138, 0.12);
+  }
+
+  #shortcuts-panel .bulk.none:hover { background: rgba(255, 138, 138, 0.24); }
+
   #shortcuts-panel .pin {
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.16);
@@ -2018,7 +2062,13 @@
 
   <aside id="shortcuts-panel" hidden aria-label="Keyboard shortcuts">
     <button id="shortcuts-close" title="Close (Esc)" aria-label="Close">&times;</button>
-    <h2>Shortcuts</h2>
+    <div class="shortcuts-head">
+      <h2>Shortcuts</h2>
+      <button id="shortcuts-all" class="bulk all" type="button"
+              title="Keep every shortcut on screen">All</button>
+      <button id="shortcuts-none" class="bulk none" type="button"
+              title="Clear the hint bar">None</button>
+    </div>
   </aside>
   <button id="shortcuts-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
 
