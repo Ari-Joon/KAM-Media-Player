@@ -1,30 +1,28 @@
 import assert from 'node:assert/strict';
 import {
-  BarsVisual, ScopeVisual, TunnelVisual, ColoursVisual,
+  BarsVisual, TunnelVisual, ColoursVisual,
   ParticlesVisual, KaleidoscopeVisual, VinylVisual, NoneVisual,
 } from '../client/visuals.js';
 import {
   GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual,
   MosaicVisual, AuroraVisual, PulseVisual,
 } from '../client/visuals2.js';
-import { PainterVisual } from '../client/painter.js';
 import { StickMenVisual } from '../client/stickmen.js';
+import { VISUALS as REGISTRY } from '../client/registry.js';
 
-// Every 2D visualisation in the menu. The WebGL one is excluded: it needs a real
-// GL context, and `main.js` already drops it when one is unavailable.
-const VISUALS = {
-  BarsVisual, ScopeVisual, TunnelVisual, ColoursVisual,
-  ParticlesVisual, KaleidoscopeVisual, VinylVisual, NoneVisual,
-  GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual,
-  MosaicVisual, AuroraVisual, PulseVisual,
-  PainterVisual,
-  // Added after two wall-clock reads were found in it: the camera drift and the
-  // whole environment layer ran on performance.now(), so the scene kept moving
-  // while playback was paused and sat at a different point for every viewer.
-  // It was the only 2D visualisation this test did not cover, which is exactly
-  // why that survived.
-  StickMenVisual,
-};
+// Every visualisation in the menu, taken from the registry itself.
+//
+// This was a hand-written list, and a hand-written list is wrong the moment
+// somebody adds a visualisation and forgets it - which had already happened
+// once: the note below records Stick Men being the only 2D visualisation this
+// test did not cover, "which is exactly why that survived". It then happened
+// again with Now Playing and Lyrics, and the suite went on reporting 18/18 as
+// though nothing had been added.
+//
+// Reading the registry means a new visualisation is covered by existing at all.
+const VISUALS = Object.fromEntries(
+  REGISTRY.map((entry) => [entry.name, entry.make]),
+);
 
 /**
  * A canvas context that records every call and argument.
@@ -178,7 +176,7 @@ const describe = (call) => call.map(
 let checked = 0;
 const drifting = [];
 
-for (const [name, Visual] of Object.entries(VISUALS)) {
+for (const [name, make] of Object.entries(VISUALS)) {
   // Two instances stepped in lockstep over exactly the same playback positions,
   // with wall clocks nearly three hours apart. Anything that differs is being
   // driven by the wall clock rather than by the track - which means it keeps
@@ -202,10 +200,10 @@ for (const [name, Visual] of Object.entries(VISUALS)) {
   const contextB = recordingContext();
   performance.now = () => clockA;
   Math.random = seeded(1);
-  const a = new Visual(canvasWith(contextA));
+  const a = make(canvasWith(contextA));
   performance.now = () => clockB;
   Math.random = seeded(1);
-  const b = new Visual(canvasWith(contextB));
+  const b = make(canvasWith(contextB));
   performance.now = realNow;
   Math.random = realRandom;
   let drawn = 0;
@@ -263,8 +261,8 @@ const sparse = {
   analysis: { is_partial: true, analysed_duration_sec: 20 },
   timing: { tempo_bpm: 0, meter: 4, beats: [], tempo_confidence: 0 },
 };
-for (const [name, Visual] of Object.entries(VISUALS)) {
-  const visual = new Visual(canvasWith(recordingContext()));
+for (const [name, make] of Object.entries(VISUALS)) {
+  const visual = make(canvasWith(recordingContext()));
   let fakeNow = 0;
   performance.now = () => fakeNow;
   assert.doesNotThrow(() => {
