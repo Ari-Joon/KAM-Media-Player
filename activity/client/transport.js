@@ -465,11 +465,11 @@ export class Transport {
     loop.addEventListener('click', () => this.send('loop'));
 
     const setPanel = (open) => {
-      // The panels share an edge, so opening one closes the others.
-      if (open) {
-        this.elements.favPanel.hidden = true;
-        this.elements.searchPanel.hidden = true;
-      }
+      // The panels share an edge, so opening one closes the others - including
+      // playlists, which this used to leave open to sit underneath the queue.
+      // `closePanels` hides the queue too, so it is closed and then reopened
+      // rather than special-cased.
+      if (open) this.closePanels();
       panel.hidden = !open;
       queueButton.classList.toggle('active', open);
       // Closing the panel ends touch selection mode. The only thing that says
@@ -814,8 +814,6 @@ export class Transport {
   /** Close every panel and menu this transport owns. */
   closeEverything() {
     this.closePanels();
-    this.elements.panel.hidden = true;
-    this.elements.queueButton.classList.remove('active');
     this.trackMenu?.close();
     const sheet = document.getElementById('shortcuts-panel');
     if (sheet) sheet.hidden = true;
@@ -1344,19 +1342,22 @@ export class Transport {
     }
   }
 
-  /** Hide every side panel. */
   /**
-   * Close the panels that share the right-hand edge.
+   * Hide every side panel.
    *
-   * The queue is deliberately not among them: it sits on the left and is meant
-   * to stay open while search, favourites or playlists are used, which is the
-   * whole reason it moved. `closeEverything` still takes it, so Escape and the
-   * shortcut close the lot.
+   * The queue is among them again. It was exempted while it lived on the left,
+   * so that it could stay open alongside playlists; back on the shared edge,
+   * leaving it open would put two panels on top of each other.
    */
   closePanels() {
+    this.elements.panel.hidden = true;
     this.elements.favPanel.hidden = true;
     this.elements.searchPanel.hidden = true;
     this.playlists.close();
+    this.elements.queueButton.classList.remove('active');
+    // Whatever closed the queue also ends touch selection mode: the bar is the
+    // only thing that says it is running, and it goes with the panel.
+    if (this.queueTouchSelect) this.clearQueueSelection();
   }
 
   /**
