@@ -826,6 +826,74 @@
 
   /* --- Keyboard shortcuts ------------------------------------------------- */
 
+  #shortcut-hints {
+    position: fixed;
+    top: max(14px, env(safe-area-inset-top, 0px));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex;
+    gap: 8px;
+    pointer-events: none;
+    /* Quiet by default and quieter still over a busy frame: this is a reminder,
+       not a control, and it must never compete with the visualisation. */
+    opacity: 0.34;
+    transition: opacity 240ms ease;
+  }
+
+  body:hover #shortcut-hints { opacity: 0.6; }
+  #shortcut-hints:empty { display: none; }
+
+  #shortcut-hints .hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 7px;
+    background: rgba(8, 8, 12, 0.55);
+    backdrop-filter: blur(8px);
+    font-family: var(--ui-font);
+    font-size: calc(10px * var(--ui-scale));
+    color: var(--trace);
+    white-space: nowrap;
+  }
+
+  #shortcut-hints kbd {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: #fff;
+    padding: 1px 5px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+  }
+
+  /* No keyboard, so no hints. */
+  @media (hover: none) { #shortcut-hints { display: none; } }
+
+  #shortcuts-panel .pin {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: transparent;
+    color: var(--trace-dim);
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  #shortcuts-panel .pin[aria-pressed="true"] {
+    color: #1a1608;
+    background: #ffd21a;
+    border-color: #ffd21a;
+  }
+
+  #shortcuts-panel .row {
+    display: contents;
+  }
+
   #shortcuts-button {
     position: fixed;
     top: max(14px, env(safe-area-inset-top, 0px));
@@ -1943,6 +2011,11 @@
   <!-- Top left, opposite the visual picker at the bottom left, so it never
        covers the transport or the panels down the right-hand edge. Its rows are
        built from the same table the key handler reads. -->
+  <!-- A few keys kept on screen. Top centre, above the stage, so it sits over
+       the emptiest part of every visualisation rather than over the transport
+       or the panels down either edge. -->
+  <div id="shortcut-hints" aria-hidden="true"></div>
+
   <aside id="shortcuts-panel" hidden aria-label="Keyboard shortcuts">
     <button id="shortcuts-close" title="Close (Esc)" aria-label="Close">&times;</button>
     <h2>Shortcuts</h2>

@@ -425,6 +425,7 @@ export class Transport {
 
     this.bind();
     this.bindShortcuts();
+    this.renderHints();
   }
 
   /** Attach listeners once. */
@@ -790,21 +791,105 @@ export class Transport {
   toggleShortcuts() {
     const sheet = document.getElementById('shortcuts-panel');
     if (!sheet) return;
-    if (sheet.hidden && sheet.childElementCount <= 1) this.fillShortcuts(sheet);
+    // Filled every time it opens, not once: the pins are drawn from state that
+    // changes while it is closed. The previous guard counted children, which
+    // broke the moment the panel gained a close button - two children meant it
+    // looked already filled and never was.
+    if (sheet.hidden) this.fillShortcuts(sheet);
     sheet.hidden = !sheet.hidden;
   }
 
   /**
+   * Which shortcuts are pinned to the hint bar.
+   *
+   * Space and the two arrows by default: they are the three worth having on
+   * screen for someone who has never opened the reference, and the three that
+   * stay useful once everything else has been learned.
+   *
+   * @returns {string[]} Keys, as `SHORTCUTS[].keys[0]`.
+   */
+  pinnedKeys() {
+    try {
+      const stored = localStorage.getItem('kam.shortcut.hints');
+      if (stored !== null) return JSON.parse(stored);
+    } catch {
+      // Storage can be unavailable in an embedded context. The defaults are
+      // not worth failing over.
+    }
+    return [' ', 'ArrowLeft', 'ArrowRight'];
+  }
+
+  /** @param {string[]} keys */
+  setPinned(keys) {
+    try {
+      localStorage.setItem('kam.shortcut.hints', JSON.stringify(keys));
+    } catch {
+      // Not persisted, but still applied for this session.
+    }
+    this.pinned = keys;
+    this.renderHints();
+  }
+
+  /** Draw the pinned shortcuts across the top of the stage. */
+  renderHints() {
+    const bar = document.getElementById('shortcut-hints');
+    if (!bar) return;
+    const keys = this.pinned ?? (this.pinned = this.pinnedKeys());
+    bar.textContent = '';
+
+    for (const entry of SHORTCUTS) {
+      if (!keys.includes(entry.keys[0])) continue;
+      const hint = document.createElement('span');
+      hint.className = 'hint';
+      const key = document.createElement('kbd');
+      key.textContent = entry.show;
+      const what = document.createElement('span');
+      // The short half of the label: "Back 5 seconds, or 30 with shift" is a
+      // reference entry, not a caption for something sitting over a video.
+      what.textContent = entry.label.split(',')[0];
+      hint.append(key, what);
+      bar.append(hint);
+    }
+  }
+
+  /**
    * Build the reference from the same table the handler uses.
+   *
+   * Each row carries a pin, so the bar is chosen from the list that documents
+   * the keys rather than from a separate settings page - the question "what
+   * does this do" and "keep this on screen" are asked in the same breath.
    *
    * @param {HTMLElement} sheet
    */
   fillShortcuts(sheet) {
     const list = sheet.querySelector('dl') ?? document.createElement('dl');
     list.textContent = '';
+    const keys = this.pinned ?? (this.pinned = this.pinnedKeys());
+
     for (const entry of SHORTCUTS) {
+      const id = entry.keys[0];
       const key = document.createElement('dt');
-      key.textContent = entry.show;
+
+      const pin = document.createElement('button');
+      pin.className = 'pin';
+      pin.type = 'button';
+      pin.textContent = '◉';
+      pin.setAttribute('aria-pressed', String(keys.includes(id)));
+      pin.title = keys.includes(id) ? 'Remove from the hint bar' : 'Keep on screen';
+      pin.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const next = this.pinned.includes(id)
+          ? this.pinned.filter((held) => held !== id)
+          : [...this.pinned, id];
+        this.setPinned(next);
+        pin.setAttribute('aria-pressed', String(next.includes(id)));
+        pin.title = next.includes(id) ? 'Remove from the hint bar' : 'Keep on screen';
+      });
+
+      const label = document.createElement('span');
+      label.textContent = entry.show;
+      key.append(pin, ' ', label);
+
       const what = document.createElement('dd');
       what.textContent = entry.label;
       list.append(key, what);
