@@ -21,6 +21,19 @@
  */
 
 import { searchSoundCloud, searchTracks } from './providers.js';
+import { loadConfig } from './config.js';
+import { logger } from './log.js';
+
+const log = logger('import');
+
+/**
+ * The YouTube key, read when it is needed rather than at module load.
+ *
+ * Reading it at load made importing this module require the whole server
+ * configuration - a client id, a bot token - which is nonsense for a link
+ * parser and made `parsePlaylistUrl` untestable without a full .env.
+ */
+const youtubeKey = () => loadConfig().YOUTUBE_API_KEY;
 
 /** Most tracks taken from one playlist. */
 const MAX_TRACKS = 60;
@@ -41,7 +54,93 @@ export function parsePlaylistUrl(url) {
   const spotify = url.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?(playlist|album)\/([A-Za-z0-9]+)/i);
   if (spotify) return { kind: 'spotify', id: spotify[2] };
 
+  // YouTube, and only via `list=`. This is the one import that does not scrape:
+  // the Data API returns the playlist in its real order, with video IDs, so
+  // nothing has to be searched for by name and nothing can be matched to the
+  // wrong song. `RD`-prefixed lists are radio mixes generated per viewer rather
+  // than playlists, and have no stable contents to import.
+  const youtube = url.match(/[?&]list=([A-Za-z0-9_-]+)/i);
+  if (youtube && !/^RD/i.test(youtube[1])) return { kind: 'youtube', id: youtube[1] };
+
   return null;
+}
+
+/**
+ * Read a YouTube playlist through the Data API.
+ *
+ * The only import that is not scraping. `playlistItems` returns the playlist in
+ * its own order with a video ID per entry, so the result is *already playable* -
+ * no track has to be searched for by name, and none can be matched to a cover,
+ * a live version or the wrong artist entirely, which is the standing risk of
+ * every name-based import.
+ *
+ * Paged deliberately rather than asking for everything: the API caps a page at
+ * 50, and a playlist of several hundred would otherwise silently import its
+ * first fifty and look complete.
+ *
+ * @param {string} id
+ * @returns {Promise<{source: string, playable: object[], name: string|null}>}
+ */
+async function readYouTubePlaylist(id) {
+  if (!youtubeKey()) {
+    throw new Error(
+      'Importing a YouTube playlist needs YOUTUBE_API_KEY. A SoundCloud, Apple '
+      + 'Music or Spotify link works without one.',
+    );
+  }
+
+  const playable = [];
+  let pageToken = '';
+
+  while (playable.length < MAX_TRACKS) {
+    const url = new URL('https://www.googleapis.com/youtube/v3/playlistItems');
+    url.search = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      playlistId: id,
+      maxResults: '50',
+      key: youtubeKey(),
+      ...(pageToken ? { pageToken } : {}),
+    }).toString();
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(response.status === 404
+        ? 'That playlist is private or does not exist.'
+        : response.status === 403
+          ? 'The YouTube quota is used up for today. It resets at midnight Pacific.'
+          : `YouTube playlist lookup failed (${response.status}).`);
+    }
+    const page = await response.json();
+
+    for (const item of page.items ?? []) {
+      const videoId = item.contentDetails?.videoId;
+      const title = item.snippet?.title;
+      // Deleted and private entries keep their slot in a playlist but carry no
+      // usable title. Skipped rather than imported as "Private video", which
+      // would queue something unplayable and look like a bug at playback.
+      if (!videoId || !title || title === 'Private video' || title === 'Deleted video') continue;
+      playable.push({
+        provider: 'youtube',
+        providerId: videoId,
+        title,
+        artist: item.snippet?.videoOwnerChannelTitle ?? '',
+        thumbnail: item.snippet?.thumbnails?.medium?.url
+          ?? item.snippet?.thumbnails?.default?.url ?? null,
+        durationSec: 0,
+      });
+      if (playable.length >= MAX_TRACKS) break;
+    }
+
+    pageToken = page.nextPageToken ?? '';
+    if (!pageToken) break;
+  }
+
+  if (playable.length === 0) {
+    throw new Error('That playlist has nothing playable in it.');
+  }
+
+  log.info(`imported ${playable.length} track(s) from a YouTube playlist`);
+  return { source: 'youtube', playable, name: null };
 }
 
 /** Fetch a page as a browser would, since both sites vary by user agent. */
@@ -145,8 +244,12 @@ function extractFromHtml(html) {
 export async function readPlaylist(url) {
   const parsed = parsePlaylistUrl(url);
   if (!parsed) {
-    throw new Error('That is not an Apple Music or Spotify playlist link.');
+    throw new Error('That is not a YouTube, Apple Music or Spotify playlist link.');
   }
+
+  // YouTube returns playable tracks directly, so it skips `resolveAll`
+  // entirely - see `readYouTubePlaylist`.
+  if (parsed.kind === 'youtube') return readYouTubePlaylist(parsed.id);
 
   // Spotify's embed view is far more stable to parse than the full app page,
   // which renders its track list client-side.
@@ -164,7 +267,7 @@ export async function readPlaylist(url) {
     );
   }
 
-  console.log(`playlist import: read ${tracks.length} track(s) from ${parsed.kind}`);
+  log.info(`read ${tracks.length} track(s) from ${parsed.kind}`);
   return { source: parsed.kind, tracks };
 }
 
@@ -207,7 +310,7 @@ export async function resolveAll(wanted, onProgress) {
     onProgress?.(index + 1, wanted.length);
   }
 
-  console.log(`playlist import: resolved ${resolved.length}, missing ${missing.length}`
+  log.info(`resolved ${resolved.length}, missing ${missing.length}`
     + ` (${youtubeAttempts} YouTube searches used)`);
   return { resolved, missing };
 }

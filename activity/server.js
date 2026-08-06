@@ -32,6 +32,7 @@ import { getPlayer, findPlayerByChannel, stopAll, logVoiceDependencies } from '.
 import { fetchClip, discard, uploadLimit, isEmbeddable, probe } from './server/embeds.js';
 import { Favourites, avatarUrl } from './server/favourites.js';
 import { Playlists, SLOTS } from './server/playlists.js';
+import { parsePlaylistUrl, readPlaylist, resolveAll } from './server/importer.js';
 import { TrafficSummary, requestLogger, logger } from './server/log.js';
 import { AnalyserWorker } from './server/analyser.js';
 import { TokenVerifier, AuthError, bearerToken } from './server/auth.js';
@@ -1443,6 +1444,38 @@ app.post('/api/playlists/:guildId', rateLimit(60, 60_000), async (request, respo
         guildId, user.id, slot, track.provider, track.providerId,
       );
       return response.json({ removed });
+    }
+
+    if (action === 'import') {
+      const link = String(request.body?.url ?? '').trim();
+      if (!parsePlaylistUrl(link)) {
+        return response.status(400).json({
+          error: 'That is not a YouTube, Apple Music or Spotify playlist link.',
+        });
+      }
+
+      const read = await readPlaylist(link);
+      // A YouTube import is already playable - the API gave video IDs. Anything
+      // else was read by *name* from a page, so each track still has to be
+      // found on a provider that can actually stream it.
+      const tracks = read.playable ?? (await resolveAll(read.tracks)).resolved;
+      if (tracks.length === 0) {
+        return response.status(400).json({ error: 'Nothing from that playlist could be found.' });
+      }
+
+      let added = 0;
+      for (const track of tracks) {
+        // Order is preserved because `add` appends and this loop is in order.
+        // That is the whole point of the feature: a playlist that arrives
+        // shuffled is not the playlist somebody linked.
+        if (playlists.add(guildId, user, slot, track).added) added += 1;
+      }
+      return response.json({
+        imported: added,
+        found: tracks.length,
+        skipped: tracks.length - added,
+        source: read.source,
+      });
     }
 
     if (action === 'add') {

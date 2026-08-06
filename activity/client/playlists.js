@@ -58,6 +58,14 @@ export class PlaylistPanel {
     this.searchBox = document.getElementById('playlist-search');
     this.searchClear = document.getElementById('playlist-search-clear');
     this.ownerFilter = document.getElementById('playlist-owner');
+    this.importBox = document.getElementById('playlist-import');
+
+    this.importBox?.addEventListener('keydown', (event) => {
+      // Otherwise a space in a pasted link pauses the music, and "/" reopens
+      // search over the top of what is being typed.
+      event.stopPropagation();
+      if (event.key === 'Enter') this.importFrom(this.importBox.value.trim());
+    });
 
     /**
      * The view, which is personal and local.
@@ -238,6 +246,36 @@ export class PlaylistPanel {
     // about twice a second, and rebuilding the panel that often would fight
     // anyone typing in the search box.
     if (changed && !this.panel?.hidden) this.render();
+  }
+
+  /**
+   * Import a linked playlist into the viewer's private slot.
+   *
+   * Private, always. An import is somebody's own collection arriving, and
+   * publishing it to a whole server because that happened to be the default
+   * would be the wrong way round - it takes one click to copy tracks across
+   * afterwards, and no clicks to regret the other order.
+   *
+   * @param {string} url
+   */
+  async importFrom(url) {
+    if (!url) return;
+    this.status.textContent = 'Reading that playlist…';
+    this.importBox.disabled = true;
+    try {
+      const result = await this.edit({ action: 'import', slot: 'private', url });
+      if (!result) return;
+      this.importBox.value = '';
+      // Both numbers, because they differ for two ordinary reasons: a track
+      // already saved is not added again, and a name-based import may not find
+      // everything. Reporting only one would make either look like a fault.
+      this.status.textContent = result.skipped > 0
+        ? `Imported ${result.imported} of ${result.found}; ${result.skipped} already saved or unavailable.`
+        : `Imported ${result.imported} tracks.`;
+      await this.refresh();
+    } finally {
+      this.importBox.disabled = false;
+    }
   }
 
   /** Whether one track matches the current search. */

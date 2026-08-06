@@ -1118,7 +1118,7 @@
      font - which is the same way the close button went wrong. Anything that
      appears in more than one panel belongs to a shared selector, not to
      whichever panel happened to be written first. */
-  #fav-search, #playlist-search {
+  #fav-search, #playlist-search, #playlist-import {
     width: 100%;
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1130,9 +1130,10 @@
     border-radius: 7px;
   }
 
-  #fav-search::placeholder, #playlist-search::placeholder { color: var(--trace-dim); }
+  #fav-search::placeholder, #playlist-search::placeholder,
+  #playlist-import::placeholder { color: var(--trace-dim); }
 
-  #fav-search:focus, #playlist-search:focus {
+  #fav-search:focus, #playlist-search:focus, #playlist-import:focus {
     outline: none;
     border-color: rgba(255, 210, 26, 0.55);
     background: rgba(255, 255, 255, 0.08);
@@ -1880,6 +1881,10 @@
       <input id="playlist-search" type="search" placeholder="Total song search"
              autocomplete="off" spellcheck="false">
       <button id="playlist-search-clear" title="Clear search" hidden>&times;</button>
+    </div>
+    <div class="search-row">
+      <input id="playlist-import" type="url" placeholder="Paste a playlist link to import"
+             autocomplete="off" spellcheck="false">
     </div>
     <div id="playlist-mine"></div>
     <div class="playlist-shared-head">
