@@ -287,6 +287,16 @@ export class Transport {
      */
     this.queueTouchSelect = false;
     /**
+     * Whether this viewer is holding the transition slider, or waiting for the
+     * server to confirm where they let go of it.
+     *
+     * Both suppress the poll writing the control's value back. The setting is
+     * room-wide, so the poll normally *should* move the slider - just not out of
+     * the hand of the person moving it.
+     */
+    this.crossfadeDragging = false;
+    this.crossfadePending = false;
+    /**
      * Playlist blocks the viewer has opened out in the queue.
      *
      * Client state, like the visualisation choice: two people looking at the
@@ -370,6 +380,8 @@ export class Transport {
       favFolders: document.getElementById('fav-folders'),
       recentPanel: document.getElementById('recent-played'),
       recentList: document.getElementById('recent-list'),
+      crossfade: document.getElementById('crossfade'),
+      crossfadeValue: document.getElementById('crossfade-value'),
       queueSelectionBar: document.getElementById('queue-selection'),
       queueSelectionCount: document.getElementById('queue-selection-count'),
       queueRemoveSelected: document.getElementById('queue-remove-selected'),
@@ -580,6 +592,41 @@ export class Transport {
       event.stopPropagation();
       bulk([]);
     });
+
+    // Track transitions. The slider lives in the interface settings menu, which
+    // is otherwise entirely per-viewer, but this one changes the room - so it is
+    // bound here with the rest of the transport rather than with the personal
+    // settings, and never written to local storage. The server owns the value.
+    const { crossfade } = this.elements;
+    if (crossfade) {
+      // Fires continuously while dragging, and every one of those is a request.
+      // The label follows the thumb immediately so the control still feels
+      // direct; only the send waits for the drag to finish.
+      crossfade.addEventListener('input', () => {
+        // `input` fires throughout a drag and `change` only on release, so this
+        // pair is also what tells the poll to keep its hands off the control
+        // while somebody is holding it.
+        this.crossfadeDragging = true;
+        this.showCrossfade(Number(crossfade.value));
+      });
+      crossfade.addEventListener('change', async () => {
+        this.crossfadeDragging = false;
+        const value = Number(crossfade.value);
+        // Below zero is the off position rather than a length, and the server
+        // reads null as "do not join tracks at all".
+        //
+        // Held until the reply lands, because the reply is the snapshot that
+        // carries the new value: without it the next poll - which may have been
+        // in flight before the change - would write the old value straight back.
+        this.crossfadePending = true;
+        try {
+          await this.send('crossfade', value < 0 ? null : value);
+        } finally {
+          this.crossfadePending = false;
+        }
+      });
+      crossfade.addEventListener('click', (event) => event.stopPropagation());
+    }
 
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
     this.elements.queueClearSelection.addEventListener('click', () => this.clearQueueSelection());
@@ -1990,6 +2037,23 @@ export class Transport {
       : `${left} track${left === 1 ? '' : 's'} queued`;
     if (typeof state.favourited === 'boolean') this.setFavourited(state.favourited);
 
+    // The transition setting is room-wide, so the slider follows the server -
+    // otherwise two people in the same channel would see different positions
+    // and each would think theirs was the one in effect.
+    //
+    // Skipped while this viewer is mid-drag: the poll is a second behind the
+    // thumb, and letting it write back would drag the control out of the user's
+    // hand. `crossfadePending` clears on the reply to their own change.
+    if (this.elements.crossfade && !this.crossfadeDragging && !this.crossfadePending) {
+      const value = state.crossfadeSec === null || state.crossfadeSec === undefined
+        ? -1
+        : state.crossfadeSec;
+      if (Number(this.elements.crossfade.value) !== value) {
+        this.elements.crossfade.value = String(value);
+      }
+      this.showCrossfade(value);
+    }
+
     if (!this.dragging) {
       const position = interpolatedSec ?? state.positionSec;
       const ratio = this.durationSec > 0
@@ -2430,6 +2494,23 @@ export class Transport {
     this.queueAnchor = position;
     this.queueSignature = null;
     if (this.lastDecks) this.renderDecks(this.lastDecks);
+  }
+
+  /**
+   * Label the transition slider.
+   *
+   * Three states rather than a number with a unit, because the two ends mean
+   * something a duration does not: below zero is the feature off, and zero is a
+   * join with no fade at all, which "0s" reads as the same thing as off.
+   *
+   * @param {number} value Slider position, -1 for off.
+   */
+  showCrossfade(value) {
+    const readout = this.elements.crossfadeValue;
+    if (!readout) return;
+    if (value < 0) readout.textContent = 'Off';
+    else if (value === 0) readout.textContent = 'Gapless';
+    else readout.textContent = `${value}s`;
   }
 
   /** Drop the selection and leave touch selection mode. */

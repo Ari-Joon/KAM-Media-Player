@@ -266,6 +266,21 @@
 
   #settings-menu input[type="range"] { flex: 1; accent-color: #ffd21a; }
 
+  /* Marks a setting that changes the room rather than this viewer's window.
+     Every other control in this menu is personal, so one that is not needs to
+     say so before it is moved, not after. */
+  #settings-menu .shared-note {
+    margin-left: 6px;
+    padding: 1px 5px;
+    border: 1px solid rgba(255, 210, 26, 0.4);
+    border-radius: 3px;
+    color: #ffd21a;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+
   #ui-scale-value {
     font-family: var(--mono);
     font-size: 11px;
@@ -1925,6 +1940,15 @@
       </div>
       <h3>Interface font</h3>
       <div id="ui-fonts" class="fonts"></div>
+      <!-- Unlike everything above it, this one is not a per-viewer preference:
+           there is one stream and the whole channel hears it. Labelled as such,
+           because a slider sitting among personal settings reads as personal.
+           -1 is the off position, 0 a gapless join, and up to 12 a crossfade. -->
+      <h3>Track transitions <span class="shared-note">everyone</span></h3>
+      <div class="row">
+        <input id="crossfade" type="range" min="-1" max="12" step="1" value="-1">
+        <span id="crossfade-value">Off</span>
+      </div>
     </div>
     <div class="picker-row">
       <button id="visual-button">Silhouettes</button>

@@ -1877,6 +1877,9 @@ app.post('/api/control/:channelId', rateLimit(120, 60_000), async (request, resp
       // order back, which is the only way the light can ever go out.
       case 'shuffle': player.queue.toggleShuffle(); break;
       case 'loop': player.queue.setLoop(value ?? player.queue.cycleLoop()); break;
+      // Room-wide, like every other transport control: there is one stream and
+      // everyone in the channel hears it. `null` is off, 0 is a gapless join.
+      case 'crossfade': player.setCrossfade(value === null ? null : Number(value)); break;
       case 'stop': player.stop(); break;
       case 'playFavourite': {
         // Favourites hold a full track descriptor, so playing one needs no

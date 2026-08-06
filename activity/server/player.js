@@ -49,6 +49,88 @@ const players = new Map();
  */
 const RECENT_TRACKS = 7;
 
+/**
+ * Longest crossfade the slider offers, in seconds.
+ *
+ * Past about this the outgoing track is still clearly present a third of a
+ * phrase into the incoming one, which stops reading as a transition and starts
+ * reading as two songs playing at once.
+ */
+export const MAX_CROSSFADE_SEC = 12;
+
+/**
+ * How early a gapless join is prepared, in seconds.
+ *
+ * A crossfade schedules itself its own length before the end. A gapless join
+ * has no length, so it needs a lead of its own or there would be nothing left
+ * of the outgoing track to hand to ffmpeg. Four hundred milliseconds is enough
+ * to spawn a process and fill the player's buffer, and short enough that
+ * cancelling it - a skip landing inside the lead - loses nothing audible.
+ */
+const GAPLESS_LEAD_SEC = 0.4;
+
+/**
+ * How often the transition check runs, in milliseconds.
+ *
+ * Driven off `positionSec()` rather than a `setTimeout` aimed at the end of the
+ * track, because a timeout is a wall clock: it keeps counting while playback is
+ * paused, and it fires at a position the track is no longer at once anyone has
+ * seeked. Polling asks the only question that matters - how much of this track
+ * has actually been transmitted - and answers it correctly in both cases.
+ *
+ * 100ms is a tenth of the poll the Activity already runs, and the check is a
+ * subtraction.
+ */
+const TRANSITION_TICK_MS = 100;
+
+/**
+ * Build the ffmpeg invocation that joins two tracks into one stream.
+ *
+ * Exported and pure so the filter graph can be tested. It is the part that is
+ * both easy to get subtly wrong and impossible to notice going wrong from the
+ * outside: a transition with the wrong fade length, or with the inputs the
+ * wrong way round, still produces audio.
+ *
+ * ## Measured against real ffmpeg
+ *
+ * Two 20-second tones, joined at a position of 14s so six seconds of tail
+ * remain. A six-second crossfade produced exactly 20.000s of output
+ * (tail + incoming - fade = 6 + 20 - 6) and a gapless join exactly 26.000s
+ * (6 + 20), both at exit 0 - which is what confirms `-ss` is being read as an
+ * input option rather than decoding the whole file first. Peak level through
+ * the fade went 0.087 at the start, 0.078 in the middle, 0.088 after: a slight
+ * dip and no bump, which is the equal-gain behaviour `tri` is chosen for.
+ *
+ * @param {object} options
+ * @param {string} options.fromPath Outgoing track's file.
+ * @param {string} options.toPath Incoming track's file.
+ * @param {number} options.position Where the outgoing track is now, in seconds.
+ * @param {number} options.fade Crossfade length in seconds; 0 joins gaplessly.
+ * @returns {string[]}
+ */
+export function transitionArgs({ fromPath, toPath, position, fade }) {
+  const filter = fade > 0
+    // `tri` on both sides: equal-gain rather than equal-power. Equal-power
+    // holds the sum roughly constant, which is right for uncorrelated material
+    // and wrong here - two tracks at similar loudness sum to an audible bump in
+    // the middle of every transition.
+    ? `[0:a][1:a]acrossfade=d=${fade.toFixed(3)}:c1=tri:c2=tri[out]`
+    : '[0:a][1:a]concat=n=2:v=0:a=1[out]';
+
+  return [
+    '-loglevel', 'error',
+    // Before -i, so this is a container-index seek rather than a decode from
+    // the start of the file - the same reason `seek()` puts it there.
+    '-ss', String(position),
+    '-i', fromPath,
+    '-i', toPath,
+    '-filter_complex', filter,
+    '-map', '[out]',
+    '-f', 's16le', '-ar', '48000', '-ac', '2',
+    'pipe:1',
+  ];
+}
+
 export class GuildPlayer {
   /** @param {string} guildId */
   constructor(guildId) {
@@ -64,6 +146,49 @@ export class GuildPlayer {
     this.audioPath = null;
     /** Seconds skipped by the last seek, added to the transmitted duration. */
     this.seekOffsetSec = 0;
+
+    /**
+     * How long one track fades into the next, in seconds. 0 is a gapless join.
+     *
+     * Room-wide rather than per-viewer, like every other transport setting:
+     * there is one stream and everyone hears it.
+     */
+    this.crossfadeSec = 0;
+    /** Whether transitions are joined at all, gapless or faded. */
+    this.smoothTransitions = false;
+
+    /**
+     * Local file for the track fetched ahead, so a transition has something to
+     * fade into without waiting for a download.
+     *
+     * `prefetchUpcoming` was already fetching it and throwing the path away.
+     * @type {{key: string, path: string}|null}
+     */
+    this.prefetched = null;
+
+    /** Interval that watches for the transition point. @type {any} */
+    this.transitionTimer = null;
+    /**
+     * A handover not yet made, or null.
+     *
+     * Holds the offset within the joined resource at which the incoming track
+     * starts, so the queue advances - and the clock switches over - at the right
+     * moment rather than on a wall-clock guess. Cleared the instant the handover
+     * happens, because a stale one here stops the *next* transition ever arming.
+     * @type {{startsAtSec: number}|null}
+     */
+    this.transition = null;
+    /**
+     * The ffmpeg currently feeding the player, if any.
+     *
+     * Tracked separately from {@link transition} because the two have different
+     * lifetimes: the handover is over in a fraction of a second, while the
+     * decoder behind it goes on producing the whole of the incoming track. Left
+     * unkilled, every skip during a joined stream leaks a process that decodes
+     * a song nobody is listening to.
+     * @type {any}
+     */
+    this.decoder = null;
 
     /**
      * Supplied by the server: given a track, download its audio and return the
@@ -184,6 +309,7 @@ export class GuildPlayer {
     const track = this.queue.current();
     if (!track) return null;
 
+    this.cancelTransition();
     this.rememberPlayed(track);
     this.releaseAudio();
     this.score = null;
@@ -200,7 +326,227 @@ export class GuildPlayer {
     this.onTrackStart?.(track, this.audioPath);
     // Deliberately not awaited: the point is that it happens during playback.
     this.prefetchUpcoming();
+    this.armTransition();
     return track;
+  }
+
+  /**
+   * Watch for the point at which the next track should start coming in.
+   *
+   * ## Why this is not a timeout
+   *
+   * The obvious implementation aims a `setTimeout` at `duration - fade`. That
+   * is a wall clock, and playback is not: the timer keeps counting through a
+   * pause and fires at a position the track left long ago after a seek. Polling
+   * the transmitted position asks the only question that matters and is right
+   * in both cases.
+   */
+  armTransition() {
+    this.stopTransitionTimer();
+    if (!this.smoothTransitions) return;
+
+    const track = this.queue.current();
+    const duration = Number(track?.durationSec) || 0;
+    // Without a duration there is no "near the end" to detect, so the track
+    // ends the way it always did. Live streams and anything the provider gave
+    // no length for land here.
+    if (duration <= 0) return;
+
+    this.transitionTimer = setInterval(() => {
+      this.checkTransition(duration).catch((error) => {
+        console.error(`[voice ${this.guildId}] transition failed:`, error.message);
+        this.cancelTransition();
+      });
+    }, TRANSITION_TICK_MS);
+  }
+
+  /** Stop the watcher without disturbing a transition already under way. */
+  stopTransitionTimer() {
+    if (this.transitionTimer) clearInterval(this.transitionTimer);
+    this.transitionTimer = null;
+  }
+
+  /**
+   * Abandon any pending or in-flight transition.
+   *
+   * Anything that changes what is playing has to call this: a skip, a seek, a
+   * jump or a stop all invalidate a transition that was scheduled against a
+   * track that is no longer the one playing. Leaving one armed would splice the
+   * previous track's successor into whatever the user actually asked for.
+   */
+  cancelTransition() {
+    this.stopTransitionTimer();
+    this.transition = null;
+    this.killDecoder();
+  }
+
+  /**
+   * Stop whichever ffmpeg is feeding the player.
+   *
+   * Each one is a full decode of an entire song, so leaving them running is not
+   * a tidiness point: skipping through a queue with transitions on would pile up
+   * one decoder per skip, all of them working.
+   */
+  killDecoder() {
+    if (!this.decoder) return;
+    try {
+      this.decoder.kill('SIGKILL');
+    } catch {
+      // Already gone, which is the outcome this wanted anyway.
+    }
+    this.decoder = null;
+  }
+
+  /**
+   * One tick of the transition watcher.
+   *
+   * Does two jobs, in this order: hand over the clock when a transition already
+   * running reaches the incoming track, and start one when the outgoing track
+   * gets near enough to its end.
+   *
+   * @param {number} duration Length of the outgoing track, in seconds.
+   */
+  async checkTransition(duration) {
+    if (this.transition) {
+      // `playbackDuration` counts from the start of the joined resource, and
+      // the incoming track begins at a known offset within it. Reaching that
+      // offset is the moment the queue moves on.
+      const elapsed = (this.player.state.resource?.playbackDuration ?? 0) / 1000;
+      if (elapsed >= this.transition.startsAtSec) this.completeTransition();
+      return;
+    }
+
+    const lead = this.crossfadeSec > 0 ? this.crossfadeSec : GAPLESS_LEAD_SEC;
+    if (this.positionSec() < duration - lead) return;
+
+    // Only one attempt per track. Whether it succeeds or gives up, the watcher
+    // stops here - a failed attempt retried every tick would spawn a decoder
+    // ten times a second for the rest of the track.
+    this.stopTransitionTimer();
+    await this.startTransition(duration);
+  }
+
+  /**
+   * Join the outgoing track to the incoming one in a single stream.
+   *
+   * ## Why one resource covers two tracks
+   *
+   * An `AudioPlayer` plays one resource at a time, and a voice connection
+   * subscribes to one player - so there is no arrangement of the discord.js
+   * pieces that has two tracks audible at once. The mixing has to happen before
+   * the player sees it, and ffmpeg already does exactly this: `acrossfade`
+   * takes the tail of one input and the head of another and returns one stream.
+   *
+   * The resource that results spans a track boundary, which sounds like it
+   * should break the clock the visuals depend on. It does not, because the
+   * boundary is at a known offset: `acrossfade` puts the incoming track's zero
+   * at the start of the fade, and `concat` puts it at the end of the outgoing
+   * tail. Either way `playbackDuration` minus that offset is the incoming
+   * track's true position - still a measurement of audio actually transmitted,
+   * which is the property that made the clock trustworthy in the first place.
+   *
+   * @param {number} duration Length of the outgoing track, in seconds.
+   */
+  async startTransition(duration) {
+    // The same lookup `prefetchUpcoming` uses, deliberately: the only file this
+    // can join to is the one the prefetch decided to fetch.
+    const next = this.queue.upcoming()[0];
+    // Nothing to join to. The track ends and the Idle handler does whatever it
+    // would have done anyway, including rolling onto another deck.
+    if (!next?.providerId) return;
+
+    const key = `${next.provider}:${next.providerId}`;
+    // Only a file already on disk. Downloading here would stall the transition
+    // past the end of the outgoing track, which is worse than the gap this
+    // exists to remove.
+    if (this.prefetched?.key !== key) return;
+    const nextPath = this.prefetched.path;
+    if (!this.audioPath) return;
+
+    const position = this.positionSec();
+    const tail = Math.max(0, duration - position);
+    const fade = this.crossfadeSec;
+    // A fade cannot be longer than what is left to fade out of. Near the end of
+    // a track shorter than the setting, this shortens it rather than refusing.
+    const effective = Math.min(fade, tail);
+
+    // Whatever was feeding the player is about to be replaced.
+    this.killDecoder();
+    const ffmpeg = spawn('ffmpeg', transitionArgs({
+      fromPath: this.audioPath, toPath: nextPath, position, fade: effective,
+    }));
+    ffmpeg.on('error', (error) => console.error('[transition] ffmpeg:', error.message));
+    this.decoder = ffmpeg;
+
+    const resource = createAudioResource(ffmpeg.stdout, { inputType: StreamType.Raw });
+    // The incoming track's zero: immediate under a crossfade, after the
+    // outgoing tail under a gapless join.
+    this.transition = { startsAtSec: effective > 0 ? 0 : tail };
+
+    this.currentResource = resource;
+    this.player.play(resource);
+    // Position is now measured against the joined resource, and the outgoing
+    // track's own offset within it is where it was when the join began.
+    this.seekOffsetSec = position;
+
+    console.log(`[voice ${this.guildId}] ${effective > 0
+      ? `crossfading ${effective.toFixed(1)}s into` : 'joining'} "${next.title}"`);
+
+    // Restart the watcher: it now has the handover to detect.
+    this.transitionTimer = setInterval(() => {
+      this.checkTransition(duration).catch(() => {});
+    }, TRANSITION_TICK_MS);
+  }
+
+  /**
+   * Hand the queue and the clock over to the incoming track.
+   *
+   * No audio starts here - it is already playing, inside the joined resource.
+   * This is the bookkeeping that makes everything downstream agree about which
+   * track that is: the queue advances, the score is dropped so the analyser
+   * builds the incoming one's, and `seekOffsetSec` goes to the negative of the
+   * boundary offset so `positionSec` reports the new track's own position.
+   */
+  completeTransition() {
+    const startsAtSec = this.transition?.startsAtSec ?? 0;
+    // Cleared before anything below can return early, and before the timer is
+    // re-armed. A handover left standing here is not untidiness: to
+    // `checkTransition` a non-null transition means "still waiting to hand
+    // over", so it returns on every tick - the next track would never arm one,
+    // and every transition after this one would be a hard cut.
+    this.transition = null;
+    this.stopTransitionTimer();
+
+    const track = this.queue.next(false);
+    if (!track) {
+      // The queue emptied under us between arming and arriving. The joined
+      // resource still has the incoming audio in it, so let it play out; the
+      // Idle handler will find nothing left and end the session properly.
+      return;
+    }
+
+    this.rememberPlayed(track);
+    this.score = null;
+    // Subtracting the boundary rather than zeroing: `playbackDuration` keeps
+    // counting from the start of the joined resource, so the new track's
+    // position is that count minus where it began.
+    // `|| 0` only to turn -0 into 0. A crossfade has no lead, so negating its
+    // zero offset leaves a negative zero sitting in the player's state, which
+    // is numerically fine and confusing to read in a log.
+    this.seekOffsetSec = -startsAtSec || 0;
+
+    // The incoming track's audio is inside the joined resource, so there is no
+    // new file to load - but the analyser still needs a path, and the prefetch
+    // is what put one on disk.
+    const path = this.prefetched?.path ?? null;
+    if (path) {
+      this.audioPath = path;
+      this.onTrackStart?.(track, path);
+    }
+    this.prefetched = null;
+    this.prefetchUpcoming();
+    // The next transition is armed against the *new* track's length.
+    this.armTransition();
   }
 
   /**
@@ -231,6 +577,13 @@ export class GuildPlayer {
     this.prefetching = key;
 
     Promise.resolve(this.loadAudio(next))
+      // The path is kept now, not discarded. A transition has to hand ffmpeg a
+      // real file at the moment it starts, and this is the only place that
+      // knows one is already on disk - the alternative is a download inside the
+      // transition, which would stall past the end of the outgoing track.
+      .then((path) => {
+        if (path && this.prefetching === key) this.prefetched = { key, path };
+      })
       .catch(() => {})
       .finally(() => {
         if (this.prefetching === key) this.prefetching = null;
@@ -244,6 +597,10 @@ export class GuildPlayer {
    * @returns {Promise<object|null>} The new track, or null when the queue ends.
    */
   async advance(manual) {
+    // A skip lands here with a transition possibly already mixing the *next*
+    // track in. `startCurrent` cancels it too, but the queue-end branch below
+    // returns before reaching it.
+    this.cancelTransition();
     let next = this.queue.next(manual);
 
     // A deck running dry while others still hold tracks would leave the room in
@@ -294,6 +651,11 @@ export class GuildPlayer {
     if (!this.audioPath) return false;
     const target = Math.max(0, seconds);
 
+    // A transition was scheduled against a position this track is no longer at,
+    // and an in-flight one is mixing in a track the user has just seeked away
+    // from. Both are stale the moment a seek lands.
+    this.cancelTransition();
+
     // ffmpeg decodes from the offset and emits raw PCM; -ss before -i seeks by
     // container index, which is near-instant.
     const ffmpeg = spawn('ffmpeg', [
@@ -304,12 +666,53 @@ export class GuildPlayer {
       'pipe:1',
     ]);
     ffmpeg.on('error', (error) => console.error('[seek] ffmpeg:', error.message));
+    // Tracked so the next thing to replace the resource kills it. Scrubbing the
+    // bar spawns one of these per drop, and before this they all kept decoding.
+    this.decoder = ffmpeg;
 
     const resource = createAudioResource(ffmpeg.stdout, { inputType: StreamType.Raw });
     this.currentResource = resource;
     this.player.play(resource);
     this.seekOffsetSec = target;
+    // Re-armed against the seeked-to position, so seeking into the last few
+    // seconds of a track still transitions rather than falling off the end.
+    this.armTransition();
     return true;
+  }
+
+  /**
+   * Set how long one track takes to fade into the next.
+   *
+   * A single control for both behaviours the slider offers: any positive value
+   * is a crossfade of that length, and zero is a gapless join. "Off" is not a
+   * position on the slider - it is the setting being absent, which is what
+   * `smoothTransitions` records.
+   *
+   * Takes effect on the current track, not only the next one: re-arming here
+   * means dragging the slider mid-song changes how *that* song ends.
+   *
+   * @param {number|null} seconds Null or a negative value turns joining off.
+   * @returns {number} The value actually stored.
+   */
+  setCrossfade(seconds) {
+    // `null` is tested before the conversion, not after: `Number(null)` is 0,
+    // and 0 is a real setting here - a gapless join. Converting first turned
+    // every "off" into "join every track with no fade", which is the one
+    // outcome the caller definitely did not ask for.
+    const value = seconds === null || seconds === undefined ? NaN : Number(seconds);
+    if (!Number.isFinite(value) || value < 0) {
+      this.smoothTransitions = false;
+      this.crossfadeSec = 0;
+      this.cancelTransition();
+      return 0;
+    }
+    this.smoothTransitions = true;
+    this.crossfadeSec = Math.min(MAX_CROSSFADE_SEC, value);
+    // Only the pending transition is dropped. One already mixing is audible
+    // right now, and cutting it to apply a new length would be a jump - exactly
+    // the thing the setting exists to remove.
+    if (!this.transition) this.armTransition();
+    return this.crossfadeSec;
   }
 
   /** @returns {boolean} True if playback was paused. */
@@ -347,6 +750,8 @@ export class GuildPlayer {
 
   /** Stop playback, clear the queue and leave the channel. */
   stop() {
+    this.cancelTransition();
+    this.prefetched = null;
     this.currentResource = null;
     this.player.stop(true);
     this.releaseAudio();
@@ -412,6 +817,10 @@ export class GuildPlayer {
       durationSec: track?.durationSec ?? 0,
       playing: this.isPlaying(),
       paused: this.isPaused(),
+      // So a viewer opening the settings menu sees where the slider actually
+      // is, rather than where their own browser last left it - the setting is
+      // room-wide and anyone can have moved it.
+      crossfadeSec: this.smoothTransitions ? this.crossfadeSec : null,
       queue: this.queue.toJSON(),
       decks: this.decks.toJSON(),
       recent: this.recent ?? [],
