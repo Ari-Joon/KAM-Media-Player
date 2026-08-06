@@ -512,6 +512,27 @@
     /* Side panels take the full width: 340px on a phone leaves the list
        unreadably narrow. */
     #queue-panel, #fav-panel, #search-panel, #playlist-panel { width: min(340px, 100%); }
+
+    /* Everything added alongside playlists, sized for a thumb. The block above
+       predates all of it, so without this the newest parts of the interface
+       were the only ones still built for a mouse. */
+    #track-menu { min-width: 230px; }
+    #track-menu button { padding: 12px 11px; font-size: 14px; }
+    #recent-list li, #playlist-panel li { padding: 11px 6px; }
+    #playlist-panel .playlist-name { padding: 9px 8px; font-size: 15px; }
+    #playlist-panel .queue-all { padding: 9px 12px; }
+    #playlist-panel li .drop { padding: 8px 10px; font-size: 17px; }
+    #playlist-owner { padding: 9px 8px; font-size: 14px; }
+    #queue-selection button { padding: 10px 12px; }
+    #queue-list li.played { padding: 11px 6px; }
+
+    /* A long press opens the track menu, so the browser's own text selection
+       and callout on that press would fight it. */
+    [data-menu-track] {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
   }
 
   #transport button {

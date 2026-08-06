@@ -566,14 +566,56 @@ export class TrackMenu {
       const row = event.target.closest?.('[data-menu-track]');
       if (!row) return;
       event.preventDefault();
-      try {
-        this.open(JSON.parse(row.dataset.menuTrack), event.clientX, event.clientY);
-      } catch {
-        // A malformed attribute must not take the whole page's right-click
-        // with it.
-        this.close();
-      }
+      this.openFor(row, event.clientX, event.clientY);
     });
+
+    // --- Touch ------------------------------------------------------------
+    //
+    // A phone has no right-click, and this menu is the only way to reach "play
+    // next" or "add to playlist" - so without a long press those features
+    // simply do not exist on mobile, which is where an Activity is often
+    // watched. Drag-and-drop has the same problem and no equivalent gesture,
+    // which makes this the one that has to work.
+    let timer = null;
+    let startedAt = null;
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      startedAt = null;
+    };
+
+    document.addEventListener('touchstart', (event) => {
+      const row = event.target.closest?.('[data-menu-track]');
+      if (!row || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      startedAt = { x: touch.clientX, y: touch.clientY };
+      timer = setTimeout(() => {
+        timer = null;
+        // The tap that ends this press must not also queue the track, so the
+        // next click is swallowed. Without it a long press opens the menu and
+        // plays the song underneath it at the same time.
+        this.swallowNextClick = true;
+        this.openFor(row, startedAt.x, startedAt.y);
+      }, 500);
+    }, { passive: true });
+
+    // A press that turns into a scroll is a scroll. Ten pixels is about the
+    // slop a thumb produces while holding still.
+    document.addEventListener('touchmove', (event) => {
+      if (!timer || !startedAt) return;
+      const touch = event.touches[0];
+      if (Math.hypot(touch.clientX - startedAt.x, touch.clientY - startedAt.y) > 10) cancel();
+    }, { passive: true });
+
+    document.addEventListener('touchend', cancel, { passive: true });
+    document.addEventListener('touchcancel', cancel, { passive: true });
+
+    document.addEventListener('click', (event) => {
+      if (!this.swallowNextClick) return;
+      this.swallowNextClick = false;
+      event.stopPropagation();
+      event.preventDefault();
+    }, true);
 
     // Any click outside closes it, including a click that opens something else.
     document.addEventListener('pointerdown', (event) => {
@@ -590,6 +632,27 @@ export class TrackMenu {
   close() {
     if (this.element) this.element.hidden = true;
     this.track = null;
+  }
+
+  /**
+   * Open the menu for a row, wherever the request came from.
+   *
+   * Shared by the right-click and the long press so the two cannot drift - a
+   * menu that behaves differently by input device is worse than one that only
+   * works on one of them.
+   *
+   * @param {HTMLElement} row Carrying `data-menu-track`.
+   * @param {number} x
+   * @param {number} y
+   */
+  openFor(row, x, y) {
+    try {
+      this.open(JSON.parse(row.dataset.menuTrack), x, y);
+    } catch {
+      // A malformed attribute must not take the whole page's right-click or
+      // every long press with it.
+      this.close();
+    }
   }
 
   /**
