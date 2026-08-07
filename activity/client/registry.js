@@ -19,7 +19,7 @@ import {
   GalaxyVisual, TerrainVisual, RainVisual, FirefliesVisual, RibbonsVisual, MosaicVisual, AuroraVisual,
   PulseVisual,
 } from './visuals2.js';
-import { NowPlayingVisual, LyricsVisual } from './nowplaying.js';
+import { NowPlayingVisual } from './nowplaying.js';
 
 /**
  * Available visualisations, in menu order.
@@ -31,11 +31,14 @@ export const VISUALS = [
   { id: 'none', name: 'None (no visuals)', make: (c) => new NoneVisual(c) },
   { id: 'stickmen', name: 'Stick Men', make: (c) => new StickMenVisual(c) },
   { id: 'painter', name: 'Painter', make: (c) => new PainterVisual(c) },
-  // High in the list on purpose: these two are about the track itself rather
-  // than the analysis, and are the two people reach for when they want to know
-  // what is playing rather than to watch something.
+  // High in the list on purpose: about the track itself rather than the
+  // analysis, and what people reach for when they want to know what is playing
+  // rather than to watch something.
+  //
+  // "Lyrics" used to sit beside it. Nothing produces lyrics any more - see the
+  // note in `nowplaying.js` - so the entry could only ever have shown "No
+  // lyrics for this track", which is worse than not offering it.
   { id: 'nowplaying', name: 'Now Playing', make: (c) => new NowPlayingVisual(c) },
-  { id: 'lyrics', name: 'Lyrics', make: (c) => new LyricsVisual(c) },
   { id: 'bars', name: 'Bars & Waves', make: (c) => new BarsVisual(c) },
   { id: 'scope', name: 'Scope', make: (c) => new ScopeVisual(c) },
   { id: 'tunnel', name: 'Tunnel', make: (c) => new TunnelVisual(c) },

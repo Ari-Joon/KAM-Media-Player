@@ -2,11 +2,13 @@ librosa>=0.11.0
 soundfile>=0.12
 pydantic>=2.0
 
-# Optional: lyric transcription.
+# Lyric transcription: removed.
 #
-# Adds word-level timings and per-section mood to the score, which the
-# visualiser uses to choose choreography and colour. Pulls in CTranslate2 and
-# downloads a ~140MB model on first use, so it is left commented out - without
-# it every visualisation falls back to the audio features alone.
+# faster-whisper was used to transcribe vocals into timed words. It could not be
+# what it was asked for - instant, and accurate - because Whisper is a speech
+# model run on a CPU: seconds of decode per track, and unreliable on sung vocals
+# over a full mix. Its voice-activity filter discarded whole tracks as
+# containing no speech at all.
 #
-# faster-whisper>=1.0
+# The `lyrics` field remains in the schema, optional and unset. Filling it needs
+# a source of *pre-timed* lyrics - a synced-lyrics database - not a transcriber.

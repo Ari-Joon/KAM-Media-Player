@@ -28,11 +28,7 @@ import librosa
 import numpy as np
 import numpy.typing as npt
 
-from .lyrics import summarise, transcribe
 from .schema import (
-    Lyrics,
-    LyricMood,
-    LyricWord,
     AnalysisMeta,
     Lanes,
     Provider,
@@ -435,9 +431,9 @@ def analyse(
             if the renderer runs faster and the JSON size is acceptable.
         is_partial: Set when ``audio_path`` is a preview clip rather than the
             full track, so the renderer knows to degrade past its end.
-        with_lyrics: Transcribe the vocals and summarise their mood. Adds ten to
-            thirty seconds, so it is off by default and requested separately once
-            playback has already started.
+        with_lyrics: Accepted and ignored. The transcription pass was removed;
+            see the note where lyrics_block is set. Kept so the worker
+            protocol and any cached caller keep working unchanged.
         max_seconds: Analyse only the first this-many seconds. Used to produce a
             provisional score in well under a second so visuals can start
             immediately, with the full analysis replacing it moments later.
@@ -589,26 +585,20 @@ def analyse(
         len(sections),
     )
 
+    # No lyrics pass.
+    #
+    # Transcription was removed because it could not be what it was asked for:
+    # instant, and accurate. Whisper is a *speech* model on a CPU, so it was
+    # neither - seconds of decode per track, and unreliable on sung vocals over
+    # a full mix. Its voice-activity filter went as far as discarding whole
+    # tracks as containing no speech at all.
+    #
+    # `VisualScore.lyrics` stays in the schema and stays optional. Every
+    # consumer already treats it that way, cached scores that contain one remain
+    # valid, and a future source of *pre-timed* lyrics - a synced-lyrics
+    # database rather than a transcription, which is the only route to instant -
+    # would fill the same field without a schema change.
     lyrics_block = None
-    if with_lyrics:
-        # Transcription is slow and entirely optional: a failure here must never
-        # cost the caller its analysis, so anything going wrong yields None and
-        # the score is emitted without lyrics.
-        words = transcribe(path)
-        if words:
-            lyrics_block = Lyrics(
-                words=[
-                    LyricWord(t=round(w.start, 2), d=round(w.end - w.start, 2), w=w.text)
-                    for w in words
-                ],
-                sections=[
-                    LyricMood(**vars(summarise(words, s.start_sec, s.end_sec)))
-                    for s in sections
-                ],
-                overall=LyricMood(**vars(summarise(
-                    words, 0.0, float(duration),
-                ))),
-            )
 
     return VisualScore(
         source=source

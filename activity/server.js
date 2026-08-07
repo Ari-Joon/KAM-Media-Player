@@ -64,27 +64,6 @@ const analyser = new AnalyserWorker({
 });
 
 /**
- * Second worker, for lyrics only.
- *
- * Transcription runs 10-30 seconds against the provisional score's 0.21, and a
- * worker serves one request at a time - so on a single worker a transcription
- * that had already started held the next track's first frame behind it. It is
- * in flight through roughly the first half-minute of every uncached track,
- * which is precisely when someone skips, so this was the common case rather
- * than the rare one.
- *
- * Deliberately not warmed at boot, unlike the main worker. Its cost is loading
- * the faster-whisper model, which is only worth paying if lyrics are actually
- * requested - and `TRANSCRIBE_LYRICS` may be off, or the dependency absent, in
- * which case this process is never spawned at all.
- */
-const lyricsAnalyser = new AnalyserWorker({
-  pythonBin: PYTHON_BIN,
-  visualcorePath: VISUALCORE_PATH,
-  label: 'lyrics',
-});
-
-/**
  * Version of the Python analyser, read once at boot.
  *
  * Part of the score cache key, so improving the analyser automatically
@@ -128,19 +107,6 @@ async function attachScore(player, track, audioPath) {
     player.score = cached;
     player.analysing = false;
     log.debug(`score cache hit: ${track.title}`);
-
-    // A cached score with no lyrics gets them now.
-    //
-    // Transcription was writing its result nowhere for a long time, so every
-    // score cached before that was fixed has no lyrics - and this branch
-    // returns before the lyrics pass, so those tracks could never gain them.
-    // Playing an old favourite showed "No lyrics for this track" forever, while
-    // a track nobody had played before transcribed fine. The audio is already
-    // on disk here, so the retry costs a transcription and no download.
-    if (TRANSCRIBE_LYRICS && !cached.lyrics) {
-      log.info(`no lyrics cached for "${track.title}"; transcribing`);
-      transcribeInto(player, track, audioPath, cachePath);
-    }
     return;
   } catch {
     // Normal for a track nobody has played before.
@@ -178,60 +144,11 @@ async function attachScore(player, track, audioPath) {
       + `${score.timing.tempo_bpm} BPM, ${score.sections.length} sections`,
     );
 
-    // Third pass: lyrics.
-    //
-    // Deliberately last and not awaited. Transcription runs ten to thirty
-    // seconds, so making it part of the main analysis would delay every
-    // visualisation for something most of them do not need. Renderers already
-    // handle a score without lyrics, so this upgrades the score in place and
-    // the client picks it up on its next poll.
-    if (TRANSCRIBE_LYRICS) {
-      // Its own worker: see the note where `lyricsAnalyser` is created. On the
-      // shared worker this pass blocked the next track's provisional score for
-      // its full 10-30 seconds once it had started, and no amount of queue
-      // ordering could fix that.
-      transcribeInto(player, track, audioPath, cachePath);
-    }
   } catch (error) {
     console.error(`analysis failed for "${track.title}":`, error.message);
   } finally {
     player.analysing = false;
   }
-}
-
-/**
- * Transcribe a track's lyrics and fold them into the cache and the live score.
- *
- * Deliberately not awaited by either caller: it takes tens of seconds, and the
- * point is that it happens while the music is already playing.
- *
- * @param {import('./server/player.js').GuildPlayer} player
- * @param {object} track
- * @param {string} audioPath
- * @param {string} cachePath
- */
-function transcribeInto(player, track, audioPath, cachePath) {
-  lyricsAnalyser.analyse(audioPath, track, null, true)
-    .then(async (withLyrics) => {
-      if (!withLyrics?.lyrics) return;
-
-      // Cached even when the room has moved on. The transcription belongs to
-      // *this* track, not to whatever is playing now.
-      try {
-        await writeFile(cachePath, JSON.stringify(withLyrics));
-      } catch (error) {
-        log.error(`lyrics cache write failed: ${error.message}`);
-      }
-
-      const overall = withLyrics.lyrics.overall;
-      log.info(`lyrics for "${track.title}": ${withLyrics.lyrics.words.length} words, `
-        + `theme ${overall.theme ?? 'none'}, valence ${overall.valence}`);
-
-      // Only the live score is guarded on the track still being current.
-      if (player.queue.current()?.providerId !== track.providerId) return;
-      player.score = withLyrics;
-    })
-    .catch((error) => log.error(`lyrics pass failed: ${error.message}`));
 }
 
 // --- Discord bot ------------------------------------------------------------
@@ -249,13 +166,6 @@ const bot = new Client({
  */
 const QUICK_ANALYSIS_SEC = 45;
 
-/**
- * Whether to transcribe lyrics.
- *
- * Off unless `faster-whisper` is installed, since it is a large optional
- * dependency. Set `TRANSCRIBE_LYRICS=0` to disable it even when present.
- */
-const TRANSCRIBE_LYRICS = process.env.TRANSCRIBE_LYRICS !== '0';
 
 const favourites = new Favourites(CACHE_DIR);
 await favourites.load();
@@ -2170,7 +2080,6 @@ process.on('uncaughtException', (error) => {
   try {
     stopAll();
     analyser.stop();
-    lyricsAnalyser.stop();
   } catch {
     // Already broken; nothing useful to do but leave.
   }
@@ -2185,7 +2094,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     analyser.stop();
     // Killed too, or a transcription keeps a Python process alive after the
     // server has gone and the port stays held on the next start.
-    lyricsAnalyser.stop();
     process.exit(0);
   });
 }

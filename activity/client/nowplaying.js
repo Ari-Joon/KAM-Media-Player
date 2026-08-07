@@ -162,14 +162,24 @@ const LINE_WORDS = 9;
 /**
  * The lyrics, printed as they are sung.
  *
+ * ## Not in the menu
+ *
+ * Nothing produces lyrics any more, so this can only draw its "no lyrics"
+ * state and is no longer registered. The transcription pass behind it was
+ * removed because it could not meet what it was asked for: instant, and
+ * accurate. Whisper is a *speech* model run on a CPU, so it was neither -
+ * seconds of decode per track, and unreliable on sung vocals over a full mix,
+ * which is the same reason its voice-activity filter discarded whole tracks as
+ * containing no speech at all.
+ *
+ * Kept rather than deleted because the class is not the problem: give it a
+ * `lyrics` block from any source with real timings - a synced-lyrics database
+ * rather than a transcription - and it works as written. That is the only route
+ * to instant, and it is a different feature.
+ *
  * Karaoke, in the sense that matters: the word being sung is the bright one,
  * the words already sung stay legible behind it, and the words to come are
- * visible but dim, so you can see what is arriving. Timings come from the
- * transcription pass, which gives every word a start and a duration.
- *
- * Absent lyrics are the normal case, not an error - transcription is optional
- * and takes tens of seconds even when it runs - so this says so plainly and
- * keeps the palette moving rather than showing an empty screen.
+ * visible but dim, so you can see what is arriving.
  */
 export class LyricsVisual extends Canvas2DVisual {
   constructor(canvas) {
