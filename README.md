@@ -5,6 +5,8 @@ shared controls, and audio-reactive visuals. A Node/Express service runs the bot
 and Activity, while a persistent Python/librosa worker produces beat, section,
 energy, and spectrum data for eighteen visualisations.
 
+![Architecture](docs/architecture.svg)
+
 ## Release status
 
 Version 0.9.0 is a free, open-source **self-hosted release candidate**. The
@@ -78,7 +80,9 @@ the need to keep PowerShell open; it does not remove the server.
 - Right-click any track to queue it, play it next, or save it to a playlist
 - Optional YouTube lookup plus SoundCloud lookup
 - Persistent analyser with tempo, beats, sections, energy, punch, and spectrum
-- Seventeen Canvas2D visualisations, plus a "None" mode
+- Crossfade and gapless transitions, 0–12 seconds, remembered across restarts
+- Eighteen Canvas2D visualisations, plus a "None" mode —
+  see [the gallery](docs/VISUALS.md)
 - Stick figures with four-bar routines, formations, spring follow-through,
   beat-synchronised weight transfer, and artist-aware cast size
 - Docker, Fly.io, and Caddy deployment examples
@@ -134,6 +138,8 @@ improvements are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), and run
 
 ## Project documents
 
+- [docs/VISUALS.md](docs/VISUALS.md): the eighteen visualisations
+- [docs/pipeline.svg](docs/pipeline.svg): how a track becomes a VisualScore
 - [DEPLOY.md](DEPLOY.md): local and permanent hosting
 - [SECURITY.md](SECURITY.md): threat boundary and production blockers
 - [MEDIA_POLICY.md](MEDIA_POLICY.md): provider and media-rights limitations

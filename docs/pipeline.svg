@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" width="1200" height="520" role="img" aria-label="How a track becomes a VisualScore: resolve, fetch, a provisional analysis in 0.21 seconds, a full analysis in 2.5 seconds, then dense lanes the renderer indexes by playback position.">
+  <title>KAM Media Player — from track to VisualScore</title>
+
+  <defs>
+    <style>
+      .panel { fill: #14161c; stroke: #262b36; stroke-width: 1.5; }
+      .box   { fill: #1b1e26; stroke: #333a48; stroke-width: 1.5; }
+      .h     { font: 600 13px "Segoe UI", Inter, system-ui, sans-serif; fill: #ffd21a;
+               letter-spacing: 1.6px; }
+      .t     { font: 500 14px "Segoe UI", Inter, system-ui, sans-serif; fill: #e8edf2; }
+      .s     { font: 400 12px "Segoe UI", Inter, system-ui, sans-serif; fill: #8fa3ad; }
+      .m     { font: 400 11.5px ui-monospace, "Cascadia Code", Consolas, monospace; fill: #8fa3ad; }
+      .flow  { stroke: #4a555c; stroke-width: 1.6; fill: none; }
+    </style>
+    <marker id="p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a555c"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="520" fill="#0c0e13"/>
+
+  <text x="48" y="52" class="h">FROM TRACK TO SCORE</text>
+  <text x="48" y="80" style="font:600 22px 'Segoe UI',Inter,system-ui,sans-serif; fill:#e8edf2">Analysis runs once. Playback never waits for it.</text>
+
+  <!-- Stage 1 -->
+  <rect x="48" y="112" width="232" height="112" rx="9" class="box"/>
+  <text x="68" y="140" class="t">1 · Resolve &amp; fetch</text>
+  <text x="68" y="164" class="s">Search, or a pasted link from</text>
+  <text x="68" y="182" class="s">Spotify, Apple, Tidal — read for</text>
+  <text x="68" y="200" class="s">the track name only.</text>
+  <text x="68" y="218" class="m">→ one local audio file</text>
+
+  <!-- Stage 2 -->
+  <rect x="320" y="112" width="232" height="112" rx="9" class="box"/>
+  <text x="340" y="140" class="t">2 · Provisional</text>
+  <text x="340" y="164" class="s">First 45 seconds only.</text>
+  <text x="340" y="182" class="s">Enough for a stable tempo and</text>
+  <text x="340" y="200" class="s">a couple of sections.</text>
+  <text x="340" y="218" class="m" style="fill:#ffd21a">0.21 s — visuals start</text>
+
+  <!-- Stage 3 -->
+  <rect x="592" y="112" width="232" height="112" rx="9" class="box"/>
+  <text x="612" y="140" class="t">3 · Full track</text>
+  <text x="612" y="164" class="s">Beats, downbeats, meter,</text>
+  <text x="612" y="182" class="s">sections, seven dense lanes,</text>
+  <text x="612" y="200" class="s">sixteen spectrum bands.</text>
+  <text x="612" y="218" class="m" style="fill:#ffd21a">2.5 s — replaces it</text>
+
+  <!-- Stage 4 -->
+  <rect x="864" y="112" width="288" height="112" rx="9" class="box"/>
+  <text x="884" y="140" class="t">4 · Cached</text>
+  <text x="884" y="164" class="s">Keyed to the analyser version, so</text>
+  <text x="884" y="182" class="s">improving it invalidates old scores</text>
+  <text x="884" y="200" class="s">rather than serving them forever.</text>
+  <text x="884" y="218" class="m">superseded copies pruned at boot</text>
+
+  <path d="M 280 168 L 320 168" class="flow" marker-end="url(#p)"/>
+  <path d="M 552 168 L 592 168" class="flow" marker-end="url(#p)"/>
+  <path d="M 824 168 L 864 168" class="flow" marker-end="url(#p)"/>
+
+  <!-- ================= The lane model ================= -->
+  <rect x="48" y="256" width="1104" height="196" rx="10" class="panel"/>
+  <text x="72" y="286" class="h">WHY IT IS SHAPED LIKE THIS</text>
+
+  <text x="72" y="316" class="t">Lanes are dense, fixed-rate arrays — not events to search.</text>
+  <text x="72" y="340" class="s">A renderer draws sixty times a second and cannot afford a lookup. Every lane holds one value per frame at 30 fps, so</text>
+  <text x="72" y="358" class="s">the value for any playback position is an array index, computed in constant time and never searched for.</text>
+
+  <text x="72" y="392" class="m" style="fill:#ffd21a; font-size:14px">lane[int(playbackSec * fps)]</text>
+
+  <text x="640" y="392" class="s">Values are 0–1, rounded to 3 dp.</text>
+  <text x="640" y="410" class="s">A four-minute score is around half a megabyte —</text>
+  <text x="640" y="428" class="s">fetched once per track, never inside the 1 s poll.</text>
+
+  <!-- lane strip -->
+  <g transform="translate(72, 404)">
+    <text x="0" y="14" class="s">energy</text>
+    <g transform="translate(56, 2)">
+      <rect x="0"   y="0" width="8" height="14" rx="2" fill="#3a4250"/>
+      <rect x="12"  y="0" width="8" height="14" rx="2" fill="#4d5768"/>
+      <rect x="24"  y="0" width="8" height="14" rx="2" fill="#6d7a8d"/>
+      <rect x="36"  y="0" width="8" height="14" rx="2" fill="#ffd21a"/>
+      <rect x="48"  y="0" width="8" height="14" rx="2" fill="#8fa3ad"/>
+      <rect x="60"  y="0" width="8" height="14" rx="2" fill="#6d7a8d"/>
+      <rect x="72"  y="0" width="8" height="14" rx="2" fill="#4d5768"/>
+      <rect x="84"  y="0" width="8" height="14" rx="2" fill="#3a4250"/>
+      <rect x="96"  y="0" width="8" height="14" rx="2" fill="#4d5768"/>
+      <rect x="108" y="0" width="8" height="14" rx="2" fill="#6d7a8d"/>
+      <rect x="120" y="0" width="8" height="14" rx="2" fill="#8fa3ad"/>
+      <rect x="132" y="0" width="8" height="14" rx="2" fill="#6d7a8d"/>
+    </g>
+    <text x="204" y="14" class="m" style="fill:#ffd21a">↑ one frame</text>
+  </g>
+
+  <text x="48" y="492" class="m">Nothing that moves reads the wall clock. Several people watch one track together, so motion comes from the score.</text>
+</svg>

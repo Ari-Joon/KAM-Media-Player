@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.9.0 — 2026-08-07
+
+First public release. Crossfade, a queue that behaves on touch, and a long pass
+over the parts that only measurement could find.
+
+### Added
+
+- **Crossfade and gapless transitions**, 0–12 seconds, set from the queue panel
+  and remembered across restarts. One ffmpeg `acrossfade` produces a single
+  stream spanning the boundary, because an `AudioPlayer` plays one resource at a
+  time and a connection subscribes to one player — there is no arrangement of
+  the discord.js pieces with two tracks audible at once. The position clock
+  survives it: the boundary sits at a known offset, so it stays a measurement of
+  audio actually transmitted.
+- **Touch selection in the queue.** Multi-select was ctrl-click and shift-click
+  only, so the batched remove could not be reached at all on a phone. A long
+  press enters a selection mode; the selection bar is the way out.
+- **A history section** for already-played tracks, behind a toggle beside
+  shuffle. They carry no position and cannot be reordered or dropped into, so
+  inline at the top of the queue they read as queue rows that had gone wrong.
+- **Hand-to-head clearance for the stick men.** Measured over 129,600
+  hand-frames: 14.04% of them had a hand level with and beside the figure's own
+  head, now 11.93%.
+
+### Changed
+
+- The queue returns to the right-hand edge. Its own edge let it stay open
+  alongside playlists, at the cost of permanently covering the visualisation.
+- Vinyl shows the whole cover. It inscribed the artwork so nothing would be
+  cropped, then squared the source off first — which threw away the left and
+  right thirds of a 16:9 thumbnail before the inscribe happened.
+- The score cache is bounded, and superseded analyser versions are dropped at
+  boot. They can never be read again, and nothing had ever deleted them: on one
+  install that was 47MB of 62MB.
+
+### Removed
+
+- **Lyric transcription.** The requirement was instant and accurate, and local
+  Whisper can be neither: it is a speech model on a CPU, so it costs seconds per
+  track and is unreliable on sung vocals over a full mix. Its voice-activity
+  filter discarded whole tracks as containing no speech at all. The `lyrics`
+  field stays in the schema, optional and unset — filling it needs a source of
+  pre-timed lyrics, not a transcriber.
+
+### Fixed
+
+- Transitions faded at the end of the *file* rather than at the join, because
+  `acrossfade` fades the end of its first input and that input was untrimmed.
+- Transitions landed on the track's own outro, which is its quietest part, so a
+  correct fade was still inaudible.
+- Transitions clipped: two masters at half gain reach full scale exactly.
+- Gapless never fired, its lead being shorter than the gap between a provider's
+  stated duration and the real file.
+- `VisualScore.lyrics` was typed `dict` while the analyser built a `Lyrics`, so
+  every completed transcription was discarded at the last step.
+
 ## 0.2.0-alpha — 2026-08-05
 
 Playlists, a console worth reading, and a long pass over the visualisations.
