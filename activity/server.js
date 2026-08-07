@@ -32,6 +32,7 @@ import { getPlayer, findPlayerByChannel, stopAll, logVoiceDependencies } from '.
 import { fetchClip, discard, uploadLimit, isEmbeddable, probe } from './server/embeds.js';
 import { Favourites, avatarUrl } from './server/favourites.js';
 import { PlayerSettings } from './server/settings.js';
+import { pruneScoreCache } from './server/scorecache.js';
 import { Playlists, SLOTS } from './server/playlists.js';
 import { parsePlaylistUrl, readPlaylist, resolveAll } from './server/importer.js';
 import { TrafficSummary, requestLogger, logger } from './server/log.js';
@@ -2051,6 +2052,17 @@ async function warmAnalyser() {
     `Analyser worker started in ${((Date.now() - startedAt) / 1000).toFixed(1)}s `
     + `(version ${analyserVersion}; score cache keyed to it)`,
   );
+
+  // Only once the version is known: it is what says which scores are live, and
+  // running this before it would delete every one of them.
+  const pruned = await pruneScoreCache(CACHE_DIR, analyserVersion);
+  const mb = (bytes) => (bytes / 1024 / 1024).toFixed(0);
+  if (pruned.staleCount > 0 || pruned.freed > 0) {
+    log.info(`score cache: dropped ${pruned.staleCount} superseded `
+      + `(${mb(pruned.staleBytes)}MB)`
+      + (pruned.freed > 0 ? `, trimmed ${mb(pruned.freed)}MB to budget` : '')
+      + `; ${mb(pruned.liveBytes)}MB live`);
+  }
 
   const ytdlp = await checkYtDlp();
   console.log(ytdlp

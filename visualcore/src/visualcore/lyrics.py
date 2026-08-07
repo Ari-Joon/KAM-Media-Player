@@ -16,13 +16,17 @@ Install it with::
 
     pip install faster-whisper
 
-## Why the small model
+## Why the smallest model
 
-``base`` transcribes roughly ten times faster than real time on a CPU and is
-accurate enough for the purpose here. Nothing downstream needs a perfect
-transcript: choreography reads sentiment and keywords, so an occasional
-misheard word changes nothing. A larger model would triple the runtime for
-accuracy no one would see.
+``tiny``. Nothing downstream needs a perfect transcript: choreography reads
+sentiment and keywords, so an occasional misheard word changes nothing.
+
+Measured against ``base`` on a 3:46 track, both warm: 6.5s against 9.3s, and
+both returned the same 300 words with an identical opening line. That is one
+track, and ``tiny`` is generally the weaker model on unclear vocals - but the
+transcript is never read by a person, and a third off the runtime is a third off
+the CPU spike, which is the cost that actually matters here. This runs on the
+same machine as Discord's video encoding and has competed with it before.
 
 ## Why mood is computed here rather than in the client
 
@@ -42,7 +46,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Model size. See the note above on why this is not larger.
-MODEL_SIZE = "base"
+MODEL_SIZE = "tiny"
 
 # Cached between tracks: loading takes several seconds and the worker is
 # long-lived, so paying it once rather than per track matters.
