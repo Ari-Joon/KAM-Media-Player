@@ -36,7 +36,7 @@ intensity = score.lanes.energy[frame]
 | `timing` | tempo, meter, beat times, downbeat times | snapping motion to the grid |
 | `lanes` | 7 dense curves at 30 fps, all normalised 0–1 | continuous motion, colour, scale |
 | `sections` | contiguous structural spans | palette and move-set changes |
-| `lyrics` | reserved, next stage | choreography intent only, never on screen |
+| `lyrics` | present, never populated | see MEDIA_POLICY; transcription was removed |
 | `choreography` | reserved, LLM stage | per-section palette and moves |
 
 Three rules the renderer must follow:

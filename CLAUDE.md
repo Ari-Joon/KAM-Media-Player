@@ -12,7 +12,7 @@ Guidance for Claude Code working in this repository.
   `activity/server/analyser.js`. Produces a **VisualScore** JSON document —
   the single contract between analysis and rendering, defined in
   `visualcore/src/visualcore/schema.py`.
-- **`activity/client/`** — vanilla JS, no framework. 17 visualisations plus a
+- **`activity/client/`** — vanilla JS, no framework. 18 visualisations plus a
   "None" entry, registered in `client/registry.js` (`VISUALS`). Implementations
   live in `visuals.js`, `visuals2.js`, `stickmen.js` and `painter.js`. All of
   them are Canvas2D: there is no WebGL path, and reintroducing one means

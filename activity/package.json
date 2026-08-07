@@ -1,6 +1,6 @@
 {
   "name": "kam-media-player",
-  "version": "0.2.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Self-hosted Discord media player Activity with audio-reactive visuals.",
   "license": "AGPL-3.0-or-later",
