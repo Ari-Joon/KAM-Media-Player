@@ -297,6 +297,14 @@ export class Transport {
     this.crossfadeDragging = false;
     this.crossfadePending = false;
     /**
+     * Whether the history section is expanded.
+     *
+     * Closed by default and per-viewer, like the playlist blocks: it is a way of
+     * looking at the queue, not a property of it, and one person opening it
+     * should not push everyone else's queue down the panel.
+     */
+    this.historyOpen = false;
+    /**
      * Playlist blocks the viewer has opened out in the queue.
      *
      * Client state, like the visualisation choice: two people looking at the
@@ -382,6 +390,8 @@ export class Transport {
       recentList: document.getElementById('recent-list'),
       crossfade: document.getElementById('crossfade'),
       crossfadeValue: document.getElementById('crossfade-value'),
+      historyList: document.getElementById('history-list'),
+      historyButton: document.getElementById('queue-history'),
       queueSelectionBar: document.getElementById('queue-selection'),
       queueSelectionCount: document.getElementById('queue-selection-count'),
       queueRemoveSelected: document.getElementById('queue-remove-selected'),
@@ -593,11 +603,11 @@ export class Transport {
       bulk([]);
     });
 
-    // Track transitions. The slider lives in the interface settings menu, which
-    // is otherwise entirely per-viewer, but this one changes the room - so it is
-    // bound here with the rest of the transport rather than with the personal
-    // settings, and never written to local storage. The server owns the value.
+    // Track transitions, at the top of the queue panel. Bound here with the
+    // rest of the transport rather than with the interface settings, because
+    // the server owns the value and it changes what the room hears.
     const { crossfade } = this.elements;
+
     if (crossfade) {
       // Fires continuously while dragging, and every one of those is a request.
       // The label follows the thumb immediately so the control still feels
@@ -627,6 +637,16 @@ export class Transport {
       });
       crossfade.addEventListener('click', (event) => event.stopPropagation());
     }
+
+    this.elements.historyButton?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.historyOpen = !this.historyOpen;
+      // Re-rendered rather than just unhidden, so the section is rebuilt from
+      // the current snapshot instead of from whatever it held when it was last
+      // open - the queue moves on while it is closed.
+      this.queueSignature = null;
+      if (this.lastDecks) this.renderDecks(this.lastDecks);
+    });
 
     this.elements.queueRemoveSelected.addEventListener('click', () => this.removeSelected());
     this.elements.queueClearSelection.addEventListener('click', () => this.clearQueueSelection());
@@ -2200,16 +2220,25 @@ export class Transport {
     }
     this.playlists?.setQueued(order);
 
-    // Played tracks, above the upcoming ones and dimmed. Kept short on purpose:
-    // this is "what was that last one", not a listening history, and a long
-    // list of things already heard would push the actual queue off the screen.
+    // Played tracks, in their own collapsed section rather than inline above
+    // the queue.
     //
-    // Rendered before the rows but excluded from `queuePositions`, so a drop
-    // can never be aimed into the past - the gap arithmetic addresses upcoming
-    // tracks only.
-    for (const track of (queue.played ?? []).slice().reverse()) {
-      list.append(this.playedRow(track));
+    // They sat at the top of this list marked with a rewind glyph, and read as
+    // queue entries that had gone wrong - they are not queued, they carry no
+    // position, and they pushed the actual queue down the panel. A section
+    // behind a toggle keeps them reachable, which is their whole purpose,
+    // without spending the list on things already heard.
+    //
+    // Never in `queuePositions`, so a drop cannot be aimed into the past - the
+    // gap arithmetic addresses upcoming tracks only.
+    const played = (queue.played ?? []).slice().reverse();
+    const history = this.elements.historyList;
+    if (history) {
+      history.textContent = '';
+      for (const track of played) history.append(this.playedRow(track));
+      history.hidden = !this.historyOpen || played.length === 0;
     }
+    this.updateHistoryButton(played.length);
 
     this.queuePositions = [];
     queue.upcoming.forEach((track, index) => {
@@ -2219,6 +2248,26 @@ export class Transport {
 
     this.updateQueueCount(queue);
     this.updateQueueSelectionBar();
+  }
+
+  /**
+   * Label the history toggle, and hide it when there is nothing behind it.
+   *
+   * A toggle that opens an empty section is furniture, and at the start of a
+   * session there is never anything behind it - so it appears only once
+   * something has actually been played.
+   *
+   * @param {number} count
+   */
+  updateHistoryButton(count) {
+    const button = this.elements.historyButton;
+    if (!button) return;
+    button.hidden = count === 0;
+    button.textContent = this.historyOpen ? `history ${count} ▴` : `history ${count}`;
+    button.setAttribute('aria-expanded', String(this.historyOpen));
+    button.title = this.historyOpen
+      ? 'Hide tracks already played'
+      : `${count} track${count === 1 ? '' : 's'} already played`;
   }
 
   /**
@@ -2508,9 +2557,10 @@ export class Transport {
   showCrossfade(value) {
     const readout = this.elements.crossfadeValue;
     if (!readout) return;
-    if (value < 0) readout.textContent = 'Off';
-    else if (value === 0) readout.textContent = 'Gapless';
-    else readout.textContent = `${value}s`;
+    // Three states rather than a number with a unit, because the ends mean
+    // something a duration does not: below zero is off, and "0s" would read as
+    // the same thing as off rather than as a join with no fade.
+    readout.textContent = value < 0 ? 'Off' : (value === 0 ? 'Gapless' : `${value}s`);
   }
 
   /** Drop the selection and leave touch selection mode. */

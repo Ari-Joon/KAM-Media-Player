@@ -260,10 +260,23 @@ class VisualScore(BaseModel):
     lanes: Lanes
     sections: list[Section]
 
-    lyrics: dict | None = Field(
+    # Typed as the model, not as a bare ``dict``.
+    #
+    # It was ``dict | None`` from when this field was a placeholder, and it
+    # stayed that way after ``Lyrics`` was written - so the lyrics pass built a
+    # ``Lyrics`` and pydantic rejected it: "Input should be a valid dictionary
+    # [input_type=Lyrics]". Every transcription completed and was then thrown
+    # away at the last step, which is why the visuals stayed empty while the
+    # worker was demonstrably doing the work.
+    #
+    # The serialised shape is unchanged, so cached scores stay readable and
+    # SCHEMA_VERSION does not move. A dict still validates, by coercion; what
+    # changes is that the model the analyser actually constructs does too.
+    lyrics: Lyrics | None = Field(
         default=None,
-        description="Reserved for the timed-lyrics pass. Never rendered as "
-        "on-screen text - it exists to inform choreography intent only.",
+        description="Timed lyrics and per-section mood, from the transcription "
+        "pass. Never rendered as on-screen text - it exists to inform "
+        "choreography intent only.",
     )
     choreography: dict | None = Field(
         default=None,

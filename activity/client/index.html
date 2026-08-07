@@ -266,19 +266,50 @@
 
   #settings-menu input[type="range"] { flex: 1; accent-color: #ffd21a; }
 
-  /* Marks a setting that changes the room rather than this viewer's window.
-     Every other control in this menu is personal, so one that is not needs to
-     say so before it is moved, not after. */
-  #settings-menu .shared-note {
-    margin-left: 6px;
-    padding: 1px 5px;
-    border: 1px solid rgba(255, 210, 26, 0.4);
-    border-radius: 3px;
-    color: #ffd21a;
-    font-size: 9px;
-    letter-spacing: 0.08em;
+  /* Track transitions, at the top of the queue panel. Boxed off from the list
+     below it because it is a setting rather than a track. */
+  #queue-fade {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  #queue-fade .fade-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  #queue-fade .fade-title {
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.70 * var(--ui-scale));
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    vertical-align: middle;
+    color: var(--trace-dim);
+  }
+
+  /* The value carries the colour, because it is the part that changes. */
+  #crossfade-value {
+    font-family: var(--ui-font);
+    font-size: calc(var(--ui-size) * 0.85 * var(--ui-scale));
+    color: #ffd21a;
+  }
+
+  #queue-fade input[type="range"] { width: 100%; accent-color: #ffd21a; }
+
+  /* Says the setting is shared before it is moved, not after: a slider reads as
+     a personal preference unless it says otherwise, and this one is heard by
+     everybody in the channel. */
+  #queue-fade .fade-note {
+    margin: 6px 0 0;
+    font-family: var(--sans);
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--trace-dim);
   }
 
   #ui-scale-value {
@@ -539,7 +570,7 @@
     #playlist-panel li .drop { padding: 8px 10px; font-size: 17px; }
     #playlist-owner { padding: 9px 8px; font-size: 14px; }
     #queue-selection button { padding: 10px 12px; }
-    #queue-list li.played { padding: 11px 6px; }
+    #history-list li.played { padding: 11px 6px; }
 
     /* A long press opens the track menu, so the browser's own text selection
        and callout on that press would fight it. */
@@ -1764,7 +1795,11 @@
     white-space: nowrap;
   }
 
-  #queue-list li {
+  /* The history list shares the queue's row layout: the rows are the same
+     shape, and only their section differs. Listed together rather than copied
+     so a change to one cannot silently leave the other behind. */
+  #queue-list li,
+  #history-list li {
     display: grid;
     /* The first column is the playlist marker, and it is present on every row
        whether or not the row has one. Sizing the grid per row instead would
@@ -1784,17 +1819,34 @@
   /* An untagged row still occupies the marker column, empty. */
   #queue-list li.track:not([data-playlist]) .num { grid-column: 2; }
 
-  #queue-list li:hover { background: rgba(255, 255, 255, 0.07); }
+  #queue-list li:hover,
+  #history-list li:hover { background: rgba(255, 255, 255, 0.07); }
 
   /* Already played: present but clearly behind the playhead. Dimmed rather than
      hidden, because the whole reason it is here is to be clicked. */
-  #queue-list li.played { opacity: 0.42; }
-  #queue-list li.played:hover { opacity: 0.85; background: rgba(255, 255, 255, 0.07); }
-  #queue-list li.played .name { text-decoration: none; }
-  #queue-list li.played .num { color: var(--trace); }
-  #queue-list .num { color: var(--trace-dim); font-variant-numeric: tabular-nums; }
-  #queue-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #queue-list .time { color: var(--trace-dim); font-variant-numeric: tabular-nums; }
+  #history-list li.played { opacity: 0.42; }
+  #history-list li.played:hover { opacity: 0.85; background: rgba(255, 255, 255, 0.07); }
+  #history-list li.played .name { text-decoration: none; }
+  #history-list li.played .num { color: var(--trace); }
+  #history-list[hidden] { display: none; }
+  /* Set in from the queue below it, so the section reads as belonging to the
+     toggle above rather than as the top of the queue - which is exactly how it
+     read when these rows lived in the queue itself. */
+  #history-list {
+    margin: 0 0 12px;
+    padding: 0 0 0 8px;
+    border-left: 2px solid rgba(255, 255, 255, 0.10);
+  }
+
+  #queue-list .num, #history-list .num {
+    color: var(--trace-dim); font-variant-numeric: tabular-nums;
+  }
+  #queue-list .name, #history-list .name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #queue-list .time, #history-list .time {
+    color: var(--trace-dim); font-variant-numeric: tabular-nums;
+  }
   #queue-list .empty { color: var(--trace-dim); cursor: default; display: block; }
 
   #queue-list .tools { display: flex; gap: 3px; opacity: 0; transition: opacity 120ms ease; }
@@ -1940,15 +1992,6 @@
       </div>
       <h3>Interface font</h3>
       <div id="ui-fonts" class="fonts"></div>
-      <!-- Unlike everything above it, this one is not a per-viewer preference:
-           there is one stream and the whole channel hears it. Labelled as such,
-           because a slider sitting among personal settings reads as personal.
-           -1 is the off position, 0 a gapless join, and up to 12 a crossfade. -->
-      <h3>Track transitions <span class="shared-note">everyone</span></h3>
-      <div class="row">
-        <input id="crossfade" type="range" min="-1" max="12" step="1" value="-1">
-        <span id="crossfade-value">Off</span>
-      </div>
     </div>
     <div class="picker-row">
       <button id="visual-button">Silhouettes</button>
@@ -2075,9 +2118,30 @@
   <aside id="queue-panel" hidden>
     <button id="queue-close" title="Close (Esc)" aria-label="Close">&times;</button>
     <h2>Queue <span id="queue-count"></span></h2>
+    <!-- Track transitions sit with the queue, not in the settings menu.
+         The settings menu is per-viewer preferences applied to this browser;
+         this changes what the whole channel hears, and it is about what happens
+         between one queued track and the next - so it belongs beside the list
+         of them. -1 is off, 0 a gapless join, and up to 12 a crossfade. -->
+    <div id="queue-fade">
+      <div class="fade-head">
+        <span class="fade-title">Crossfade</span>
+        <span id="crossfade-value">Off</span>
+      </div>
+      <input id="crossfade" type="range" min="-1" max="12" step="1" value="-1">
+      <p class="fade-note">Everyone in the channel hears this.</p>
+    </div>
     <div class="deck-actions">
       <button id="deck-shuffle">shuffle</button>
+      <!-- Already-played tracks used to sit inline at the top of the queue,
+           marked with a rewind glyph. They are not queued, so they read as
+           queue entries that had gone wrong - and they pushed the actual queue
+           down the panel. Their own section behind a toggle keeps them
+           reachable, which is the whole point of them, without spending the
+           list on things already heard. -->
+      <button id="queue-history" hidden aria-expanded="false">history</button>
     </div>
+    <ol id="history-list" hidden></ol>
     <!-- Only present while something is selected. A permanent "remove
          selected" that does nothing most of the time is furniture. -->
     <div id="queue-selection" hidden>

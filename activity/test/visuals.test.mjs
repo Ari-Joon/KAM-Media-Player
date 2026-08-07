@@ -369,3 +369,66 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
     `Terrain started with ${flat.length} of ${visual.rows.length} rows flat`);
   console.log('terrain priming: 2/2 pass (the landscape is populated on the first frame)');
 }
+
+// --- Vinyl: the whole cover, not the middle of it ----------------------------
+// The label is the album art inscribed in the record's centre circle, with the
+// leftover segments filled by mirroring it across each edge.
+//
+// It was inscribed *after* the source had been squared off, so a 16:9 thumbnail
+// lost its left and right thirds before the inscribe ever happened - the label
+// showed the middle of the picture, enlarged, which is the crop that inscribing
+// exists to avoid.
+{
+  const context = recordingContext();
+  const visual = new VinylVisual(canvasWith(context));
+  // A 16:9 thumbnail, which is what every YouTube track supplies.
+  visual.label = { naturalWidth: 1280, naturalHeight: 720 };
+  visual.render(score, 4);
+
+  const draws = context.calls.filter(([name]) => name === 'drawImage');
+  assert.ok(draws.length >= 5,
+    `expected the cover and its four mirrors, got ${draws.length} draws`);
+
+  // Five arguments, not nine: a nine-argument drawImage carries a source
+  // rectangle, and any source rectangle smaller than the image is a crop.
+  // Recorded calls carry the method name in front, so five arguments is six.
+  for (const call of draws) {
+    assert.equal(call.length, 6,
+      'the cover is drawn with a source rectangle, so part of it is cropped away');
+  }
+
+  // Corners on the circle, whatever the aspect ratio: the drawn rectangle's
+  // diagonal is the label's diameter. That is what "inscribed" means for a
+  // rectangle, and for a square source it reduces to side = radius * root two.
+  const [, , , , width, height] = draws[draws.length - 1];
+  assert.ok(Math.abs(width / height - 1280 / 720) < 1e-9,
+    `the cover was stretched: drawn ${width.toFixed(1)}x${height.toFixed(1)}`);
+
+  // The label is clipped to a circle, and the arc that does it gives the radius
+  // the drawing is inscribed in. Read it back rather than recomputing it here,
+  // so this stays honest if the label is ever resized.
+  const clipIndex = context.calls.findIndex(([name]) => name === 'clip');
+  const clipArc = context.calls.slice(0, clipIndex).reverse()
+    .find(([name]) => name === 'arc');
+  assert.ok(clipArc, 'the label is no longer clipped to a circle');
+  const radius = clipArc[3];
+  assert.ok(Math.abs(Math.hypot(width, height) - radius * 2) < 1e-6,
+    `the cover is not inscribed: diagonal ${Math.hypot(width, height).toFixed(1)} `
+    + `against a diameter of ${(radius * 2).toFixed(1)} - under fills the circle `
+    + 'with mirror rather than cover, over crops the corners off');
+
+  // The mirrors sit exactly one image away, so each shares an edge with the
+  // original rather than overlapping it or leaving a gap.
+  const offsets = context.calls
+    .filter(([name]) => name === 'translate')
+    .map(([, dx, dy]) => `${Math.round(dx)},${Math.round(dy)}`);
+  for (const expected of [
+    `0,${-Math.round(height)}`, `0,${Math.round(height)}`,
+    `${-Math.round(width)},0`, `${Math.round(width)},0`,
+  ]) {
+    assert.ok(offsets.includes(expected),
+      `no mirror at ${expected}; the segment beside that edge stays empty`);
+  }
+
+  console.log('vinyl label: 10/10 pass (whole cover inscribed, mirrors on every edge)');
+}

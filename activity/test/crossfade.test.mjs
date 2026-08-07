@@ -1,5 +1,23 @@
 import assert from 'node:assert/strict';
-import { GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC } from '../server/player.js';
+import {
+  GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC, GAPLESS_LEAD_SEC,
+} from '../server/player.js';
+
+// --- The gapless lead --------------------------------------------------------
+// The trigger compares transmitted position against `track.durationSec`, which
+// is provider metadata. When the real file is shorter than its stated length,
+// the resource goes Idle before the position reaches the trigger and the join
+// never fires at all - which is exactly how gapless failed in a live channel
+// while crossfade worked, because a fade's lead is its own length and carries
+// seconds of slack.
+//
+// So this is a tolerance for that disagreement, not a budget for ffmpeg's spawn
+// (measured at 82-208ms to first byte, median 120). It costs nothing audible:
+// `concat` keeps the whole remaining tail, so triggering earlier lengthens the
+// outgoing part of the joined stream rather than cutting it.
+assert.ok(GAPLESS_LEAD_SEC >= 1,
+  `the gapless lead is ${GAPLESS_LEAD_SEC}s, too tight to survive a duration `
+  + 'that disagrees with the file by a second');
 
 // --- The ffmpeg invocation ---------------------------------------------------
 // This is the part that is both easy to get subtly wrong and impossible to
@@ -28,6 +46,21 @@ import { GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC } from '../server/player
     'the seek is not an input option, so it decodes the whole track first');
   assert.equal(faded[faded.indexOf('-ss') + 1], '178.5');
 
+  // The outgoing input must be trimmed to exactly the fade, and this is the
+  // difference between a crossfade and no crossfade at all.
+  //
+  // `acrossfade` fades the *end* of its first input. Untrimmed, that input runs
+  // to the end of the file and the fade happens there, however early the
+  // transition started - measured, joining 120s into a six-minute track gave
+  // output byte-identical to the unfaded track for its first eight seconds.
+  // With the trim the same join fades 0.244 -> 0.196 -> 0.155 -> 0.115 ->
+  // 0.069 -> 0.026 RMS across its six seconds.
+  const trim = faded.indexOf('-t');
+  assert.ok(trim > faded.indexOf('-ss') && trim < faded.indexOf('-i'),
+    'the outgoing track is not trimmed to the fade, so the fade lands at the '
+    + 'end of the file instead of at the join');
+  assert.equal(Number(faded[trim + 1]), 6);
+
   // Raw s16le at 48k stereo, which is what StreamType.Raw promises the player.
   // Anything else is silence or noise, not an error.
   assert.deepEqual(
@@ -44,7 +77,7 @@ import { GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC } from '../server/player
   assert.match(gaplessFilter, /concat=n=2:v=0:a=1/, 'a gapless join used a fade');
   assert.doesNotMatch(gaplessFilter, /acrossfade/);
 
-  console.log('transition ffmpeg args: 8/8 pass (input order, fade length, raw output)');
+  console.log('transition ffmpeg args: 10/10 pass (input order, fade trim, raw output)');
 }
 
 // --- The setting -------------------------------------------------------------
@@ -116,7 +149,9 @@ import { GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC } from '../server/player
   player.decks.queue.index = 0;
 
   // A gapless join starts the incoming track after the outgoing tail, so the
-  // boundary is 0.4s into the joined resource.
+  // boundary sits however long that tail was into the joined resource. The
+  // value here is arbitrary on purpose - what is under test is that the offset
+  // is subtracted, whatever it happens to be.
   player.transition = { startsAtSec: 0.4 };
   player.prefetched = { key: 'p:2', path: 'b.webm' };
   player.onTrackStart = () => {};
@@ -212,4 +247,4 @@ import { GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC } from '../server/player
   console.log('transition cancellation: 8/8 pass (cancel, skip, stop)');
 }
 
-console.log("crossfade: 37/37 pass");
+console.log("crossfade: 39/39 pass");

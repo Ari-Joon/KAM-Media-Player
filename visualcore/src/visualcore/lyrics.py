@@ -160,6 +160,17 @@ def _load_model():
     return _MODEL
 
 
+#: Below this, a VAD-filtered result is treated as a failure rather than as an
+#: instrumental, and the decode is retried without it.
+#:
+#: Measured across four cached tracks: songs with vocals came back with 267,
+#: 300, 501 and 673 words, while a genuinely instrumental one gave 2. Anywhere
+#: in the wide gap between works; twenty is far enough above the instrumental
+#: case to avoid pointless second passes and far enough below the real ones to
+#: never reject a transcript.
+MIN_PLAUSIBLE_WORDS = 20
+
+
 def transcribe(audio_path: str | Path, max_seconds: float | None = None) -> list[Word] | None:
     """Transcribe a track's vocals to timed words.
 
@@ -174,31 +185,63 @@ def transcribe(audio_path: str | Path, max_seconds: float | None = None) -> list
     if model is None:
         return None
 
-    try:
+    def decode(**vad: object) -> list[Word]:
         segments, _info = model.transcribe(
             str(audio_path),
             word_timestamps=True,
-            # Voice activity detection skips instrumental passages entirely,
-            # which on a typical track removes a third of the work and stops the
-            # model inventing words to fit the music.
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 700},
             # Greedy decoding: beam search costs several times more for a
             # transcript nobody reads.
             beam_size=1,
             condition_on_previous_text=False,
+            **vad,
         )
-
-        words: list[Word] = []
+        found: list[Word] = []
         for segment in segments:
             if max_seconds is not None and segment.start > max_seconds:
                 break
             for word in segment.words or []:
                 cleaned = word.word.strip()
                 if cleaned:
-                    words.append(Word(text=cleaned, start=word.start, end=word.end))
+                    found.append(Word(text=cleaned, start=word.start, end=word.end))
+        return found
 
-        logger.info("lyrics: %d words transcribed", len(words))
+    try:
+        # Voice activity detection was meant to skip instrumental passages, and
+        # on this material it skips everything.
+        #
+        # Measured on a six-minute track: ``VAD filter removed 06:06.922 of
+        # audio`` - the whole file - and the pass returned 0 words in 1.1s.
+        # Silero is trained on speech, and sung vocals over a full mix do not
+        # look like speech to it. Dropping the threshold to 0.2 recovered one
+        # word. So this was never a tuning problem, and it is why the lyric
+        # visuals were empty while the worker looked like it was doing its job.
+        #
+        # Kept as a first attempt rather than deleted, because when it does work
+        # it genuinely removes a third of the decode - and falling back costs
+        # nothing but the second pass on tracks where it has already failed.
+        words = decode(
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 700},
+        )
+        if len(words) >= MIN_PLAUSIBLE_WORDS:
+            logger.info("lyrics: %d words transcribed", len(words))
+            return words
+
+        # A near-empty result is not "this track is instrumental" - it is much
+        # more often VAD having eaten the vocal, and the two are told apart by
+        # retrying without it. Only genuinely instrumental tracks pay for the
+        # second pass.
+        #
+        # The bar is a count rather than emptiness. Testing only for empty was
+        # not enough: VAD left four words on a four-minute Weeknd track, which
+        # is plainly not a transcript but is not nothing either, so the retry
+        # never ran and the lyric visuals stayed blank with a successful-looking
+        # log line saying "4 words".
+        logger.info(
+            "lyrics: VAD left only %d words; retrying without it", len(words),
+        )
+        words = decode(vad_filter=False)
+        logger.info("lyrics: %d words transcribed without VAD", len(words))
         return words
     except Exception as error:  # noqa: BLE001 - never fail the analysis
         logger.warning("lyrics: transcription failed (%s)", error)

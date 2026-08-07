@@ -62,12 +62,29 @@ export const MAX_CROSSFADE_SEC = 12;
  * How early a gapless join is prepared, in seconds.
  *
  * A crossfade schedules itself its own length before the end. A gapless join
- * has no length, so it needs a lead of its own or there would be nothing left
- * of the outgoing track to hand to ffmpeg. Four hundred milliseconds is enough
- * to spawn a process and fill the player's buffer, and short enough that
- * cancelling it - a skip landing inside the lead - loses nothing audible.
+ * has no length, so it needs a lead of its own or there is nothing left of the
+ * outgoing track to hand to ffmpeg.
+ *
+ * ## Why this is seconds and not milliseconds
+ *
+ * It was 0.4s, sized against how long ffmpeg takes to start: measured over ten
+ * runs, first audio byte arrives 82-208ms after spawn (median 120), so 400ms
+ * looked like ample margin. Gapless still did not work while crossfade did, and
+ * the spawn was never the binding constraint.
+ *
+ * The trigger compares `positionSec()` - audio actually transmitted - against
+ * `track.durationSec`, which is *provider metadata*. The two disagree by a
+ * second or more routinely, and when the real file is shorter than its stated
+ * length the resource goes Idle before the position ever reaches
+ * `duration - 0.4`. The transition simply never fires and the old ending runs,
+ * gap and all. A crossfade hid this completely: its lead is its own length, so
+ * a five-second fade carries five seconds of slack.
+ *
+ * Three seconds is that slack, made explicit. It costs nothing audible, because
+ * `concat` keeps the whole remaining tail - triggering earlier lengthens the
+ * outgoing part of the joined stream rather than cutting it.
  */
-const GAPLESS_LEAD_SEC = 0.4;
+export const GAPLESS_LEAD_SEC = 3;
 
 /**
  * How often the transition check runs, in milliseconds.
@@ -114,7 +131,22 @@ export function transitionArgs({ fromPath, toPath, position, fade }) {
     // holds the sum roughly constant, which is right for uncorrelated material
     // and wrong here - two tracks at similar loudness sum to an audible bump in
     // the middle of every transition.
-    ? `[0:a][1:a]acrossfade=d=${fade.toFixed(3)}:c1=tri:c2=tri[out]`
+    //
+    // The limiter is not optional. Modern masters peak within a whisker of full
+    // scale, so two of them at half gain reach it exactly and any correlation
+    // goes over: measured on two cached tracks, the fade peaked at 1.0000 with
+    // six samples pinned at full scale, which is audible as a crackle right in
+    // the middle of the transition. At limit 0.97 the peak lands at 0.9742 with
+    // none pinned, and RMS moves 0.1543 to 0.1534 - a twentieth of a percent,
+    // so it costs no loudness worth hearing.
+    //
+    // `level=disabled` stops alimiter normalising the whole stream up to its
+    // ceiling, which would make every track after a transition louder than it
+    // was before one.
+    ? `[0:a][1:a]acrossfade=d=${fade.toFixed(3)}:c1=tri:c2=tri,`
+      + 'alimiter=limit=0.97:attack=5:release=50:level=disabled[out]'
+    // `concat` plays one track then the other and never sums them, so there is
+    // nothing here that can clip.
     : '[0:a][1:a]concat=n=2:v=0:a=1[out]';
 
   return [
@@ -122,6 +154,17 @@ export function transitionArgs({ fromPath, toPath, position, fade }) {
     // Before -i, so this is a container-index seek rather than a decode from
     // the start of the file - the same reason `seek()` puts it there.
     '-ss', String(position),
+    // Trimmed to exactly the fade, and this is not an optimisation.
+    //
+    // `acrossfade` fades the *end* of its first input. Left untrimmed that
+    // input runs to the end of the file, so the fade happens there - however
+    // early the transition was started. Measured: joining at 120s into a
+    // six-minute track produced output byte-identical to the unfaded track for
+    // its first eight seconds, because the fade was still 247 seconds away.
+    //
+    // Trimming makes the fade begin at the join by construction, which is also
+    // what makes `startsAtSec = 0` true for the incoming track's clock.
+    ...(fade > 0 ? ['-t', fade.toFixed(3)] : []),
     '-i', fromPath,
     '-i', toPath,
     '-filter_complex', filter,
@@ -346,11 +389,17 @@ export class GuildPlayer {
     if (!this.smoothTransitions) return;
 
     const track = this.queue.current();
-    const duration = Number(track?.durationSec) || 0;
+    const stated = Number(track?.durationSec) || 0;
     // Without a duration there is no "near the end" to detect, so the track
     // ends the way it always did. Live streams and anything the provider gave
     // no length for land here.
-    if (duration <= 0) return;
+    if (stated <= 0) return;
+    // Only a crossfade wants the audible end. A gapless join plays the outgoing
+    // track through to its real end and then continues, so trimming its outro
+    // would be removing part of the song for no reason - and it would put the
+    // handover offset out by the length of that outro, because `concat` keeps
+    // audio the audible end says is not there.
+    const duration = this.crossfadeSec > 0 ? this.audibleEndSec(stated) : stated;
 
     this.transitionTimer = setInterval(() => {
       this.checkTransition(duration).catch((error) => {
@@ -358,6 +407,50 @@ export class GuildPlayer {
         this.cancelTransition();
       });
     }, TRANSITION_TICK_MS);
+  }
+
+  /**
+   * Where the track stops being audible, rather than where its file ends.
+   *
+   * ## Why a crossfade against the stated duration is inaudible
+   *
+   * Almost every produced track ends by decaying to silence, and fading the
+   * last few seconds before the stated end means fading that decay - so there
+   * is nothing left of the outgoing track to cross with. Measured on a real
+   * pair from the cache: the last six seconds of the outgoing track run 0.021,
+   * 0.010, 0.005, 0.002, 0.0002, 0.000 RMS. By two seconds in it is already a
+   * fiftieth of its level, and the "crossfade" is silence fading into the next
+   * song - which is exactly what a hard skip sounds like.
+   *
+   * The energy lane already knows where the music stops. Walking back from the
+   * end to the last frame above the floor puts the fade over material that is
+   * actually playing, so the two tracks genuinely overlap.
+   *
+   * Falls back to the stated duration whenever the score cannot answer: a
+   * partial score covers only the opening of the track, so its lane ends long
+   * before the music does and trusting it would cut every track short.
+   *
+   * @param {number} stated The provider's duration, in seconds.
+   * @returns {number}
+   */
+  audibleEndSec(stated) {
+    const lanes = this.score?.lanes;
+    if (this.score?.analysis?.is_partial) return stated;
+    if (!lanes?.fps || !Array.isArray(lanes.energy) || lanes.energy.length === 0) {
+      return stated;
+    }
+    // Lane values are normalised 0-1 and rounded to 3dp, so the floor has to
+    // sit above the rounding rather than at zero.
+    const FLOOR = 0.02;
+    for (let i = lanes.energy.length - 1; i >= 0; i--) {
+      if (lanes.energy[i] > FLOOR) {
+        const end = (i + 1) / lanes.fps;
+        // Never past the stated end, and never so early that the track would
+        // lose a recognisable amount of itself to a bad analysis.
+        return Math.max(stated * 0.75, Math.min(stated, end));
+      }
+    }
+    return stated;
   }
 
   /** Stop the watcher without disturbing a transition already under way. */
@@ -704,10 +797,17 @@ export class GuildPlayer {
       this.smoothTransitions = false;
       this.crossfadeSec = 0;
       this.cancelTransition();
+      console.log(`[voice ${this.guildId}] transitions off`);
       return 0;
     }
     this.smoothTransitions = true;
     this.crossfadeSec = Math.min(MAX_CROSSFADE_SEC, value);
+    // Logged because there is no other way to tell a setting that never arrived
+    // from one that arrived and did nothing - and those two have completely
+    // different causes. Without this the only evidence is the absence of a
+    // transition line, which both produce.
+    console.log(`[voice ${this.guildId}] transitions ${this.crossfadeSec > 0
+      ? `crossfade ${this.crossfadeSec}s` : 'gapless'}`);
     // Only the pending transition is dropped. One already mixing is audible
     // right now, and cutting it to apply a new length would be a jump - exactly
     // the thing the setting exists to remove.

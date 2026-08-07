@@ -1266,42 +1266,47 @@ export class VinylVisual extends Canvas2DVisual {
       context.beginPath();
       context.arc(0, 0, labelRadius, 0, Math.PI * 2);
       context.clip();
-      // Aspect-fill rather than stretch. Album art is usually square but not
-      // always, and forcing a 16:9 thumbnail into a circle distorted every face
-      // on it. Cropping the source to a square first preserves the proportions
-      // and costs nothing extra - drawImage does the crop in the same call.
       const iw = this.label.naturalWidth || this.label.width || 1;
       const ih = this.label.naturalHeight || this.label.height || 1;
-      const side = Math.min(iw, ih);
 
       // The whole cover, inscribed, with the gaps mirrored.
       //
-      // Filling the circle with the artwork cropped it to the middle, so a
-      // sleeve with its title across the top or its artist along the bottom lost
-      // exactly the part worth reading. Inscribing the square instead - corners
-      // touching the circle, so its side is the radius times root two - shows
-      // all of it, and leaves four circular segments empty around the edges.
+      // ## Nothing is cropped, in either direction
       //
-      // Each segment is filled by reflecting the artwork across the edge beside
-      // it. The reflection is continuous with the picture at the join, because a
-      // mirror always is, so the cover appears to bleed outward into the disc
-      // instead of ending at a hard square. The four corners need nothing: with
-      // the corners on the circle there is no area left over between the edges.
-      const square = labelRadius * Math.SQRT2;
-      const half = square / 2;
+      // Filling the circle cropped the artwork to the middle, so a sleeve with
+      // its title across the top or its artist along the bottom lost exactly the
+      // part worth reading. Inscribing fixed that - and then a second crop
+      // undid it: the source was squared off first, which on a 16:9 thumbnail
+      // throws away the left and right thirds before the inscribe ever happens.
+      // The label showed the middle of the picture, enlarged, which is the same
+      // failure by a different route.
+      //
+      // So the image is inscribed at its own aspect ratio: scaled until its
+      // *diagonal* is the label's diameter, which puts all four corners on the
+      // circle whatever its shape. For a square source that is the side being
+      // the radius times root two, exactly as before; for a 16:9 thumbnail it
+      // is a wide rectangle with more of the circle left over above and below.
+      //
+      // Each leftover segment is filled by reflecting the artwork across the
+      // edge beside it. The reflection is continuous with the picture at the
+      // join, because a mirror always is, so the cover appears to bleed outward
+      // into the disc instead of ending at a hard edge. The corners need
+      // nothing: with them on the circle, every point inside the circle but
+      // outside the picture is past exactly one edge.
+      const fit = (labelRadius * 2) / Math.hypot(iw, ih);
+      const width = iw * fit;
+      const height = ih * fit;
       const paint = () => context.drawImage(
-        this.label,
-        (iw - side) / 2, (ih - side) / 2, side, side,
-        -half, -half, square, square,
+        this.label, -width / 2, -height / 2, width, height,
       );
 
       // Mirrors first, so the true image lands on top of its own reflections
       // and no seam can show over it.
       for (const [dx, dy, sx, sy] of [
-        [0, -square, 1, -1],   // above
-        [0, square, 1, -1],    // below
-        [-square, 0, -1, 1],   // left
-        [square, 0, -1, 1],    // right
+        [0, -height, 1, -1],  // above
+        [0, height, 1, -1],   // below
+        [-width, 0, -1, 1],   // left
+        [width, 0, -1, 1],    // right
       ]) {
         context.save();
         context.translate(dx, dy);
