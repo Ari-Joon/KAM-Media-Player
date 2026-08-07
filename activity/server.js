@@ -31,6 +31,7 @@ import {
 import { getPlayer, findPlayerByChannel, stopAll, logVoiceDependencies } from './server/player.js';
 import { fetchClip, discard, uploadLimit, isEmbeddable, probe } from './server/embeds.js';
 import { Favourites, avatarUrl } from './server/favourites.js';
+import { PlayerSettings } from './server/settings.js';
 import { Playlists, SLOTS } from './server/playlists.js';
 import { parsePlaylistUrl, readPlaylist, resolveAll } from './server/importer.js';
 import { TrafficSummary, requestLogger, logger } from './server/log.js';
@@ -258,6 +259,10 @@ const TRANSCRIBE_LYRICS = process.env.TRANSCRIBE_LYRICS !== '0';
 const favourites = new Favourites(CACHE_DIR);
 await favourites.load();
 
+/** Playback settings that survive a restart. See `server/settings.js`. */
+const playerSettings = new PlayerSettings(CACHE_DIR);
+await playerSettings.load();
+
 const playlists = new Playlists(CACHE_DIR);
 await playlists.load();
 
@@ -483,6 +488,20 @@ function prunePendingSearches() {
  */
 function preparePlayer(player, channel = null) {
   player.loadAudio = (track) => fetchAudio(track, CACHE_DIR);
+
+  // Stored settings, applied once per player.
+  //
+  // Here rather than in `GuildPlayer`'s constructor because this is where a
+  // player is joined to the rest of the process, and the player itself knows
+  // nothing about the filesystem. Guarded so it runs once: `preparePlayer` is
+  // called on every command that might start playback, and re-applying would
+  // undo a change made since - including one made seconds ago by somebody who
+  // then pressed play.
+  if (!player.settingsApplied) {
+    player.settingsApplied = true;
+    const stored = playerSettings.get(player.guildId);
+    if (stored.crossfadeSec !== undefined) player.setCrossfade(stored.crossfadeSec);
+  }
   player.onTrackStart = (track, audioPath) => {
     attachScore(player, track, audioPath);
     // Not awaited: the cast size is a refinement, not a prerequisite.
@@ -1879,7 +1898,17 @@ app.post('/api/control/:channelId', rateLimit(120, 60_000), async (request, resp
       case 'loop': player.queue.setLoop(value ?? player.queue.cycleLoop()); break;
       // Room-wide, like every other transport control: there is one stream and
       // everyone in the channel hears it. `null` is off, 0 is a gapless join.
-      case 'crossfade': player.setCrossfade(value === null ? null : Number(value)); break;
+      case 'crossfade': {
+        const applied = player.setCrossfade(value === null ? null : Number(value));
+        // Turning it off removes the key rather than storing a value, which is
+        // correct because off is what a fresh player already is - an absent
+        // setting and a stored "off" would apply identically, and not writing
+        // one keeps the file to guilds that have actually chosen something.
+        await playerSettings.set(
+          player.guildId, 'crossfadeSec', player.smoothTransitions ? applied : null,
+        );
+        break;
+      }
       case 'stop': player.stop(); break;
       case 'playFavourite': {
         // Favourites hold a full track descriptor, so playing one needs no
