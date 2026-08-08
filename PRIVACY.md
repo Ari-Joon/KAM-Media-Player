@@ -22,7 +22,7 @@ personal data, and it is the file most likely to leave a machine by accident.
 
 `.gitignore` excludes the whole `cache/` directory, so it cannot be committed.
 That protection does **not** apply to a zip of the project folder, a screen
-share, or a copied directory — delete `cache/` before sharing the folder by any
+share, or a copied directory - delete `cache/` before sharing the folder by any
 of those routes.
 
 ## Data handled

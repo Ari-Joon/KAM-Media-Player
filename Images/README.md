@@ -2,7 +2,7 @@
 
 Working copies live in `C:\Users\akcar\images`, alongside `C:\Users\akcar\Videos`.
 
-The set that ships is in [`docs/img/`](../docs/img/) — those filenames are the
+The set that ships is in [`docs/img/`](../docs/img/) - those filenames are the
 visualisation IDs from `activity/client/registry.js`, so the gallery in
 [docs/VISUALS.md](../docs/VISUALS.md) cannot drift from the code.
 

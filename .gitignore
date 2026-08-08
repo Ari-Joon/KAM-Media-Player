@@ -32,3 +32,8 @@ Thumbs.db
 # quietly hand it to everyone who clones.
 .claude/settings.local.json
 **/.claude/settings.local.json
+
+# Working files for Claude Code. Useful to us, noise in a public repo -
+# the conventions that matter to contributors are in CONTRIBUTING.md.
+CLAUDE.md
+.claude/

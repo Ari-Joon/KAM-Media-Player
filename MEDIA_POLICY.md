@@ -16,7 +16,7 @@ path is offered.
 
 **Obtaining SoundCloud credentials is not free.** Their registration page states
 that *"You need a SoundCloud Artist Pro subscription to register API
-applications and receive credentials"* — a paid subscription, checked at
+applications and receive credentials"* - a paid subscription, checked at
 registration. So the only licensed audio path in this project is behind a
 recurring cost, and a deployment that will not pay it has no licensed path at
 all. That is a fact about the current state of the ecosystem rather than a
@@ -24,7 +24,7 @@ limitation of this software, and it is the single biggest constraint on shipping
 this publicly.
 
 The running server states which path it is on, at boot and at `GET /healthz`
-under `licensing`. Check it before exposing a deployment to anyone else — the
+under `licensing`. Check it before exposing a deployment to anyone else - the
 fallback to extraction is silent by design, so that nothing breaks for a private
 user, and that is exactly how a public deployment could end up breaching terms
 without anybody noticing.

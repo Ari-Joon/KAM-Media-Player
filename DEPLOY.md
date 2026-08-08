@@ -78,22 +78,22 @@ tunnel domains can later be reassigned, so remove the mapping when testing ends.
 ## A permanent hostname without paying
 
 The tunnel above is free and needs no account, but Cloudflare assigns a new
-hostname every time it starts — and because Discord has no API for URL mappings,
+hostname every time it starts - and because Discord has no API for URL mappings,
 that means editing the Developer Portal by hand every session. Two ways out, both
 free, neither needing the machine to be anything other than your own computer.
 
-### ngrok, with a static domain — paid plans only
+### ngrok, with a static domain - paid plans only
 
 > **The free tier cannot host a Discord Activity.** ngrok's edge serves a
 > "You are about to visit…" interstitial to any request with a browser
-> User-Agent, and Discord loads an Activity in an embedded browser — so the
+> User-Agent, and Discord loads an Activity in an embedded browser - so the
 > Activity gets the warning page instead of your app and shows a white screen.
 > Measured against the same URL at the same moment: `curl` received the app
 > (38,103 bytes), the same request with a Chrome User-Agent received the
 > interstitial (2,923 bytes).
 >
 > The only documented bypass is sending an `ngrok-skip-browser-warning` request
-> header, and nothing can add a header to the top-level document request —
+> header, and nothing can add a header to the top-level document request -
 > Discord makes it. Removing the interstitial is a paid feature. Note that
 > `curl` alone will not reveal this, because its User-Agent is not a browser.
 
@@ -126,7 +126,7 @@ TUNNEL_DOMAIN=something.ngrok-free.app
 ### Cloudflare named tunnel
 
 Free forever as well, but it needs a domain already on your Cloudflare account,
-so it is only worth it if you own one — Cloudflare will not host a zone you do
+so it is only worth it if you own one - Cloudflare will not host a zone you do
 not control, which is why this is second rather than first.
 
 ```powershell

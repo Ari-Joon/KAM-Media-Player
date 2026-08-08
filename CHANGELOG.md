@@ -1,16 +1,16 @@
 # Changelog
 
-## 0.9.0 — 2026-08-07
+## 0.9.0 - 2026-08-07
 
 First public release. Crossfade, a queue that behaves on touch, and a long pass
 over the parts that only measurement could find.
 
 ### Added
 
-- **Crossfade and gapless transitions**, 0–12 seconds, set from the queue panel
+- **Crossfade and gapless transitions**, 0-12 seconds, set from the queue panel
   and remembered across restarts. One ffmpeg `acrossfade` produces a single
   stream spanning the boundary, because an `AudioPlayer` plays one resource at a
-  time and a connection subscribes to one player — there is no arrangement of
+  time and a connection subscribes to one player - there is no arrangement of
   the discord.js pieces with two tracks audible at once. The position clock
   survives it: the boundary sits at a known offset, so it stays a measurement of
   audio actually transmitted.
@@ -29,7 +29,7 @@ over the parts that only measurement could find.
 - The queue returns to the right-hand edge. Its own edge let it stay open
   alongside playlists, at the cost of permanently covering the visualisation.
 - Vinyl shows the whole cover. It inscribed the artwork so nothing would be
-  cropped, then squared the source off first — which threw away the left and
+  cropped, then squared the source off first - which threw away the left and
   right thirds of a 16:9 thumbnail before the inscribe happened.
 - The score cache is bounded, and superseded analyser versions are dropped at
   boot. They can never be read again, and nothing had ever deleted them: on one
@@ -41,7 +41,7 @@ over the parts that only measurement could find.
   Whisper can be neither: it is a speech model on a CPU, so it costs seconds per
   track and is unreliable on sung vocals over a full mix. Its voice-activity
   filter discarded whole tracks as containing no speech at all. The `lyrics`
-  field stays in the schema, optional and unset — filling it needs a source of
+  field stays in the schema, optional and unset - filling it needs a source of
   pre-timed lyrics, not a transcriber.
 
 ### Fixed
@@ -56,7 +56,7 @@ over the parts that only measurement could find.
 - `VisualScore.lyrics` was typed `dict` while the analyser built a `Lyrics`, so
   every completed transcription was discarded at the last step.
 
-## 0.2.0-alpha — 2026-08-05
+## 0.2.0-alpha - 2026-08-05
 
 Playlists, a console worth reading, and a long pass over the visualisations.
 
@@ -67,8 +67,8 @@ Playlists, a console worth reading, and a long pass over the visualisations.
   rename or edit can publish a private collection; another member's private
   slot is never serialised. Other members' public playlists appear in the same
   panel, with a search across every playlist and a filter by member.
-- **A right-click menu on every track** — in search results, favourites, the
-  queue, and playlists — offering *add to queue*, *play next*, and either
+- **A right-click menu on every track** - in search results, favourites, the
+  queue, and playlists - offering *add to queue*, *play next*, and either
   playlist by name.
 - **Queue all**, so a playlist can actually be played rather than clicked
   through one row at a time.
@@ -89,8 +89,8 @@ Playlists, a console worth reading, and a long pass over the visualisations.
 
 - The queue panel is called Queue again, and playlists have their own place
   beside Search.
-- Stick Men: the camera cuts on the bar with a rate set by energy — eight bars
-  while quiet, one on a drop — and chooses its angle for the moment rather than
+- Stick Men: the camera cuts on the bar with a rate set by energy - eight bars
+  while quiet, one on a drop - and chooses its angle for the moment rather than
   by rotation. The whole cast hits a drop in unison, and the camera stays on
   whoever is leading.
 - Pulse is a quarter less intense; measured as the share of lit pixels over the
@@ -131,7 +131,7 @@ Playlists, a console worth reading, and a long pass over the visualisations.
 - Playlists and favourites store only server-resolved track descriptors, so
   neither can carry a client-supplied URL into the player.
 
-## 0.1.1-alpha — 2026-08-01
+## 0.1.1-alpha - 2026-08-01
 
 - repaired the npm lockfile so `npm ci` succeeds on a fresh clone;
 - made the YouTube API key optional and added no-key configuration tests;
@@ -143,6 +143,6 @@ Playlists, a console worth reading, and a long pass over the visualisations.
   third-party notices, and an accurate media/provider policy;
 - clarified permanent hosting versus local PowerShell and Discord distribution.
 
-## 0.1.0-alpha — 2026-07-31
+## 0.1.0-alpha - 2026-07-31
 
 - initial self-hosted alpha packaging.

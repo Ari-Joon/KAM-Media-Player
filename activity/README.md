@@ -1,4 +1,4 @@
-# Discord Activity — shader visualiser
+# Discord Activity - shader visualiser
 
 `/play <track>` resolves a song, analyses it, and posts a link that opens a
 full-bleed reactive visualiser inside the voice channel. This is the
@@ -7,7 +7,7 @@ lightweight render mode; silhouettes reuse the same score and clock.
 ## The one limitation you should decide about first
 
 Users never upload files, so this system has no access to full-track audio. It
-analyses a **30-second official preview** from Apple's iTunes Search API — free,
+analyses a **30-second official preview** from Apple's iTunes Search API - free,
 unauthenticated, deleted immediately after analysis, never served to anyone.
 
 That gives an accurate **BPM** and a faithful **colour and energy character**.
@@ -24,7 +24,7 @@ Three ways forward, in order of how much they cost you:
 2. **Use full audio you are allowed to have.** Free Music Archive and Jamendo
    licence full downloads. Perfect sync, much smaller catalogue.
 3. **Fetch full audio from YouTube for analysis.** Perfect sync, and against
-   YouTube's terms — the thing that got Rythm and Groovy shut down. Not built
+   YouTube's terms - the thing that got Rythm and Groovy shut down. Not built
    here, and I would not build it.
 
 Only option 1 works with "play any rap track", so it is what the code assumes.
@@ -59,7 +59,7 @@ Node **22.12+** (vite 7 requires it), Python 3.10+, and ffmpeg on `PATH`.
 
 ## Setup
 
-**1. Discord application** — at <https://discord.com/developers/applications>:
+**1. Discord application** - at <https://discord.com/developers/applications>:
 create an app, add a bot, and under **Activities → Settings** enable Activities.
 Copy the client ID, client secret, and bot token.
 
@@ -67,7 +67,7 @@ Copy the client ID, client secret, and bot token.
 quota units per call against a 10,000/day default, so roughly **100 `/play`
 calls a day** before it stops. Scores are cached, so repeats are free.
 
-**3. Install ffmpeg** — required, not optional. Preview clips are `.m4a`, and
+**3. Install ffmpeg** - required, not optional. Preview clips are `.m4a`, and
 `soundfile` cannot decode AAC, so librosa falls back to `audioread`, which
 shells out to ffmpeg. Without it every `/play` fails at the analysis step.
 
@@ -91,7 +91,7 @@ will not work:
 cloudflared tunnel --url http://localhost:3000
 ```
 
-Use `cloudflared`, not ngrok — ngrok's interstitial page breaks the iframe. Paste
+Use `cloudflared`, not ngrok - ngrok's interstitial page breaks the iframe. Paste
 the generated hostname (without `https://`) into **Activities → URL Mappings**
 with target `/`.
 
@@ -102,7 +102,7 @@ npm start
 ```
 
 Invite the bot with the `bot` and `applications.commands` scopes, plus **Create
-Invite** permission — without it the Activity link cannot be generated.
+Invite** permission - without it the Activity link cannot be generated.
 
 **7. Test.** Join a voice channel, run `/play <track>`, click the posted link.
 
@@ -136,7 +136,7 @@ the case where a buffering player reports 0 and must not yank the clock back.
 ## Preview looping
 
 A preview score covers ~30s while playback runs for minutes. Past the analysed
-window the lanes **loop** rather than clamping — clamping parked every visual on
+window the lanes **loop** rather than clamping - clamping parked every visual on
 the final analysed frame, which froze the whole scene 30 seconds in. The beat
 grid does not loop with them: it extrapolates forward from the measured tempo,
 because restarting the bar every 30s reads as a bug in a way a continuous grid

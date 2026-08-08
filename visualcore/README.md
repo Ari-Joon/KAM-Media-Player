@@ -1,4 +1,4 @@
-# visualcore — analysis stage
+# visualcore - analysis stage
 
 Turns an audio file into a **VisualScore**: the JSON contract used by the
 Activity's stick figures, shader, and canvas renderers. Analysis runs once per
@@ -34,7 +34,7 @@ intensity = score.lanes.energy[frame]
 | Block | What it is | Renderer uses it for |
 |---|---|---|
 | `timing` | tempo, meter, beat times, downbeat times | snapping motion to the grid |
-| `lanes` | 7 dense curves at 30 fps, all normalised 0–1 | continuous motion, colour, scale |
+| `lanes` | 7 dense curves at 30 fps, all normalised 0-1 | continuous motion, colour, scale |
 | `sections` | contiguous structural spans | palette and move-set changes |
 | `lyrics` | present, never populated | see MEDIA_POLICY; transcription was removed |
 | `choreography` | reserved, LLM stage | per-section palette and moves |
@@ -44,7 +44,7 @@ Three rules the renderer must follow:
 1. **Index, don't search.** `lane[int(t * fps)]`. Lanes are dense and
    fixed-rate specifically so playback position resolves in constant time.
 2. **Gate on confidence.** `tempo_confidence` below ~0.5 means beat-snapped
-   motion will look wrong — lean on `energy`/`flux` instead. `meter_confidence`
+   motion will look wrong - lean on `energy`/`flux` instead. `meter_confidence`
    below ~0.1 means `downbeats` are guesswork; don't hang structure on them.
 3. **Check `is_partial`.** Past `analysed_duration_sec`, lane data does not
    exist. Degrade to the extrapolated beat grid.

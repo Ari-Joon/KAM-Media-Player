@@ -637,7 +637,7 @@ bot.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(ButtonStyle.Secondary);
 
         return interaction.editReply({
-          content: `**${results.length} results for "${query}"** — only you can see this.`,
+          content: `**${results.length} results for "${query}"** - only you can see this.`,
           components: [
             new ActionRowBuilder().addComponents(menu),
             new ActionRowBuilder().addComponents(cancel),
@@ -781,7 +781,7 @@ bot.on(Events.InteractionCreate, async (interaction) => {
                 const flags = [];
                 if (deck.queue.loop !== 'off') flags.push(`loop ${deck.queue.loop}`);
                 if (deck.queue.shuffled) flags.push('shuffled');
-                return `${marker} \`${index}\` **${deck.name}** — `
+                return `${marker} \`${index}\` **${deck.name}** - `
                   + `${deck.queue.length} tracks`
                   + (deck.createdBy ? ` · by ${deck.createdBy}` : '')
                   + (flags.length ? ` · ${flags.join(', ')}` : '');

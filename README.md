@@ -31,7 +31,7 @@ free licensed path to audio.**
 - **YouTube audio** is obtained with yt-dlp. YouTube's developer policies
   prohibit downloading and separating audio, and no official alternative is
   offered. Nothing configures this into compliance.
-- **SoundCloud** *does* have a licensed path through their official API — but
+- **SoundCloud** *does* have a licensed path through their official API - but
   they require a paid **Artist Pro** subscription before they will issue API
   credentials at all.
 
@@ -44,7 +44,7 @@ does not pretend otherwise. See [MEDIA_POLICY.md](MEDIA_POLICY.md).
 Running your own instance makes **you** the operator. You supply your own
 Discord application and bot token, your own optional API keys, and your own
 machine; nothing is shared with, or reported to, anyone else. There is no
-telemetry in this codebase — the only outbound requests are to Discord and to
+telemetry in this codebase - the only outbound requests are to Discord and to
 the music providers themselves.
 
 That also means the provider terms above apply to *your* deployment, and the
@@ -80,8 +80,8 @@ the need to keep PowerShell open; it does not remove the server.
 - Right-click any track to queue it, play it next, or save it to a playlist
 - Optional YouTube lookup plus SoundCloud lookup
 - Persistent analyser with tempo, beats, sections, energy, punch, and spectrum
-- Crossfade and gapless transitions, 0–12 seconds, remembered across restarts
-- Eighteen Canvas2D visualisations, plus a "None" mode —
+- Crossfade and gapless transitions, 0-12 seconds, remembered across restarts
+- Eighteen Canvas2D visualisations, plus a "None" mode -
   see [the gallery](docs/VISUALS.md)
 - Stick figures with four-bar routines, formations, spring follow-through,
   beat-synchronised weight transfer, and artist-aware cast size
