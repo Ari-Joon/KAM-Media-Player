@@ -432,3 +432,55 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
 
   console.log('vinyl label: 10/10 pass (whole cover inscribed, mirrors on every edge)');
 }
+
+// --- The palette must survive a negative cycle -------------------------------
+// `LaneReader` blends between neighbouring palettes on a phase that advances
+// with playback. That phase goes *negative* in ordinary use, and the indexing
+// did not survive it:
+//
+//   - the shorter-way-round logic drives `paletteOffset` to -1 when travelling
+//     from the first palette back to the last, and
+//   - a track change restarts `scoreSec` at zero,
+//
+// so `cycle` sits around -1 for the opening seconds of the next song. A
+// negative remainder stays negative in JavaScript, `PALETTES[-1]` is undefined,
+// and every visualisation reading `lanes.palette` threw
+// "Cannot read properties of undefined (reading '0')" on the destructure.
+//
+// The render guard then disabled whatever was on screen and substituted the
+// default, so the symptom was "the visual snaps back to Painter between songs"
+// rather than anything that pointed at an array index.
+{
+  const context = recordingContext();
+  const visual = new VinylVisual(canvasWith(context));
+
+  // Wind the palette phase to where the wrap leaves it: travelling from the
+  // first scheme back to the last takes the offset below zero.
+  visual.lanes.paletteBase = 5;
+  visual.lanes.paletteOffset = -1.2;
+
+  // The opening of a track, which is exactly when scoreSec is small enough for
+  // a negative offset to dominate the phase.
+  for (const at of [0, 0.05, 0.2, 0.5, 1]) {
+    assert.doesNotThrow(
+      () => visual.render(score, at),
+      `a negative palette phase threw at ${at}s - the visual would be disabled `
+      + 'and replaced with the default on every track change',
+    );
+    const [from, to] = visual.lanes.palette;
+    assert.ok(typeof from === 'string' && from.startsWith('#'),
+      `palette start is not a colour at ${at}s: ${from}`);
+    assert.ok(typeof to === 'string' && to.startsWith('#'),
+      `palette end is not a colour at ${at}s: ${to}`);
+  }
+
+  // And far past the end of the table in both directions, since the phase is
+  // unbounded - it advances for as long as a track plays.
+  for (const offset of [-40, -7.5, 0, 7.5, 40]) {
+    visual.lanes.paletteOffset = offset;
+    assert.doesNotThrow(() => visual.render(score, 12),
+      `a palette offset of ${offset} threw`);
+  }
+
+  console.log('palette wrap: 15/15 pass (negative phase indexes a real palette)');
+}

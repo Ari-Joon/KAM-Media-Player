@@ -190,8 +190,24 @@ export class LaneReader {
     const raw = cycle - step;
     const blend = raw * raw * (3 - 2 * raw);
 
-    const current = PALETTES[step % PALETTES.length];
-    const next = PALETTES[(step + 1) % PALETTES.length];
+    // Wrapped twice, because a negative remainder stays negative in JavaScript
+    // and `PALETTES[-1]` is `undefined`.
+    //
+    // `step` genuinely goes negative, and does it at the worst possible moment.
+    // The shorter-way-round logic above will drive `paletteOffset` to -1 when
+    // travelling from the first palette back to the last, and a track change
+    // restarts `scoreSec` at zero - so `cycle` is about -1 for the opening
+    // seconds of the next song. Every visualisation that reads `lanes.palette`
+    // then threw `Cannot read properties of undefined (reading '0')` on the
+    // destructure, the render guard disabled it, and the Activity fell back to
+    // the default. It looked like "the visual snaps back to Painter between
+    // songs" rather than like an indexing bug, which is why it survived.
+    //
+    // `MosaicVisual` already wraps this way and says why. This is the same
+    // lesson in the one place it mattered most.
+    const wrap = (index) => ((index % PALETTES.length) + PALETTES.length) % PALETTES.length;
+    const current = PALETTES[wrap(step)];
+    const next = PALETTES[wrap(step + 1)];
 
     // Blended, then saturated. Mixing two colours always moves the result
     // toward grey, so without the boost the travelling palette would be duller
