@@ -1,9 +1,41 @@
 # KAM Media Player
 
-KAM Media Player is a self-hosted Discord Activity and voice bot with queues,
-shared controls, and audio-reactive visuals. A Node/Express service runs the bot
-and Activity, while a persistent Python/librosa worker produces beat, section,
-energy, and spectrum data for eighteen visualisations.
+**Music in a Discord call that you watch, not just listen to.** A self-hosted
+Activity and voice bot with a shared queue, shared controls, and eighteen
+visualisations that run off a real analysis of the track.
+
+I built this because listening to music with friends in a call is a flat
+experience. Somebody queues a song, everyone hears it, and there is nothing on
+screen but a text channel. Every bot I tried was a queue with a progress bar,
+and the visualisers that do exist bounce to whatever the browser hears rather
+than to the music itself.
+
+![Painter, most of the way through a track](docs/img/painter.png)
+
+The catch with visualising audio in Discord is that everyone is watching at
+once. If the animation is driven by each person's browser clock, everybody sees
+a different picture, it keeps moving while the track is paused, and a seek
+desyncs the room. So nothing here reads the wall clock. A Python worker analyses
+the track once into beats, downbeats, sections and sixteen spectrum bands, and
+every visualisation indexes that by playback position. Same song, same second,
+same picture, on every screen in the call.
+
+![Stick Men, dancing to the beat grid](docs/img/stickmen.png)
+
+Painter is the one I am most pleased with. It paints an original picture over
+the length of the track and finishes before the song does, and every choice
+comes from the music: the palette from the artist's country of origin, the
+composition from the song's own section structure, the brush from how loud and
+bright the passage is.
+
+| | |
+|:--:|:--:|
+| ![Vinyl](docs/img/vinyl.png) | ![Terrain](docs/img/terrain.png) |
+| **Vinyl** - the cover as a picture disc, lit by a sheen that sweeps as it turns | **Terrain** - a landscape built from the spectrum you just heard |
+| ![Galaxy](docs/img/galaxy.png) | ![Kaleidoscope](docs/img/kaleidoscope.png) |
+| **Galaxy** - the solar system, roughly to scale | **Kaleidoscope** - one wedge of spectrum, mirrored |
+
+All eighteen, with what each one does and why: **[the gallery](docs/VISUALS.md)**.
 
 ![Architecture](docs/architecture.svg)
 
