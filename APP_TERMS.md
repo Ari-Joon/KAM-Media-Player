@@ -20,7 +20,7 @@ operator does not grant rights to media merely because the application can
 locate it. Users must follow [MEDIA_POLICY.md](MEDIA_POLICY.md) and any rules
 shown by the deployment operator.
 
-## Alpha software
+## Pre-1.0 software
 
 The application is experimental and may change, fail, lose cached data, or be
 withdrawn. It is supplied without warranties to the extent permitted by law.

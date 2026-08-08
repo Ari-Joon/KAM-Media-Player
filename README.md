@@ -59,7 +59,7 @@ to find out.
 
 | Distribution | Does your PC need to stay on? | Status |
 | --- | --- | --- |
-| GitHub source; each person self-hosts | No | Ready as an alpha |
+| GitHub source; each person self-hosts | No | Ready |
 | Local development with a tunnel | Yes | Supported |
 | One permanent private deployment | No, the cloud host runs it | Supported; see DEPLOY.md |
 | One public Discord App Directory listing | No | Not offered; see the release status above |

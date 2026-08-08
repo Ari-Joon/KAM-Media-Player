@@ -6,7 +6,7 @@ There are two supported development shapes:
 - local process plus a temporary HTTPS tunnel;
 - a permanent container host that stays online without your PC or PowerShell.
 
-This guide is for personal or trusted-server alpha deployments. Do not treat it
+This guide is for personal or trusted-server deployments. Do not treat it
 as an App Directory launch guide; complete the security and provider work in
 `SECURITY.md` and `MEDIA_POLICY.md` first.
 

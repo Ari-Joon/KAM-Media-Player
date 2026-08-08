@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the newest tagged alpha receives security fixes.
+Only the newest tagged release receives security fixes.
 
 ## Reporting a vulnerability
 
@@ -13,7 +13,7 @@ profile and avoid including secrets or personal data in ordinary chat.
 
 ## Current trust boundary
 
-Version 0.2.0 is intended for personal use and otherwise trusted Discord
+Version 0.9.0 is intended for personal use and otherwise trusted Discord
 servers. It is not approved for a public, discoverable deployment.
 
 ### What is enforced now

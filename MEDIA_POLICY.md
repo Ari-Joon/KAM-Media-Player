@@ -32,7 +32,7 @@ without anybody noticing.
 
 This document describes the software accurately; it is not legal advice.
 
-## What the current alpha does
+## What the current release does
 
 SoundCloud uses their official API when credentials are configured, and falls
 back to yt-dlp extraction when they are not. YouTube always uses extraction for

@@ -23,7 +23,7 @@ each installed package or operating-system distribution.
 | vite | 7.3.6 | MIT |
 
 The complete Node dependency tree is pinned in `activity/package-lock.json`.
-At the time of the 0.2.0 audit its declared licences were MIT, Apache-2.0,
+At the time of the 0.9.0 audit its declared licences were MIT, Apache-2.0,
 BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, and Unlicense, with no unknown entries.
 
 ## Python and system runtime
