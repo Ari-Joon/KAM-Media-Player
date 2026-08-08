@@ -389,33 +389,67 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
   assert.ok(draws.length >= 5,
     `expected the cover and its four mirrors, got ${draws.length} draws`);
 
-  // Five arguments, not nine: a nine-argument drawImage carries a source
-  // rectangle, and any source rectangle smaller than the image is a crop.
-  // Recorded calls carry the method name in front, so five arguments is six.
+  // The source rectangle must cover the whole picture.
+  //
+  // It is nine arguments now rather than five, because the label trims any
+  // letterbox or pillarbox bars baked into a thumbnail before inscribing. That
+  // is not a crop of content - it is the removal of pixels that are not
+  // content - so what has to hold is that the source rectangle equals the
+  // picture, which with no bars detected is the whole image.
   for (const call of draws) {
-    assert.equal(call.length, 6,
-      'the cover is drawn with a source rectangle, so part of it is cropped away');
+    assert.equal(call.length, 10,
+      'the cover is not drawn with an explicit source rectangle');
+    const [, , sx, sy, sw, sh] = call;
+    assert.deepEqual([sx, sy, sw, sh], [0, 0, 1280, 720],
+      `part of the picture is being cropped away: source ${sx},${sy} ${sw}x${sh}`);
   }
 
-  // Corners on the circle, whatever the aspect ratio: the drawn rectangle's
-  // diagonal is the label's diameter. That is what "inscribed" means for a
-  // rectangle, and for a square source it reduces to side = radius * root two.
-  const [, , , , width, height] = draws[draws.length - 1];
+  const [, , , , , , , , width, height] = draws[draws.length - 1];
   assert.ok(Math.abs(width / height - 1280 / 720) < 1e-9,
     `the cover was stretched: drawn ${width.toFixed(1)}x${height.toFixed(1)}`);
 
   // The label is clipped to a circle, and the arc that does it gives the radius
-  // the drawing is inscribed in. Read it back rather than recomputing it here,
-  // so this stays honest if the label is ever resized.
+  // the drawing is sized against. Read it back rather than recomputing it here.
   const clipIndex = context.calls.findIndex(([name]) => name === 'clip');
   const clipArc = context.calls.slice(0, clipIndex).reverse()
     .find(([name]) => name === 'arc');
   assert.ok(clipArc, 'the label is no longer clipped to a circle');
-  const radius = clipArc[3];
-  assert.ok(Math.abs(Math.hypot(width, height) - radius * 2) < 1e-6,
-    `the cover is not inscribed: diagonal ${Math.hypot(width, height).toFixed(1)} `
-    + `against a diameter of ${(radius * 2).toFixed(1)} - under fills the circle `
-    + 'with mirror rather than cover, over crops the corners off');
+  const diameter = clipArc[3] * 2;
+
+  // Never smaller than inscribed - that would fill the circle with mirror
+  // rather than cover.
+  assert.ok(Math.hypot(width, height) >= diameter - 1e-6,
+    `the cover is smaller than inscribed: diagonal ${Math.hypot(width, height).toFixed(1)} `
+    + `against a diameter of ${diameter.toFixed(1)}`);
+
+  // A wide cover is scaled past the diagonal fit so it does not read as a strip
+  // laid across its own reflection. 16:9 inscribed by diagonal covers only 0.49
+  // of the diameter, against a square cover's 0.71.
+  const fill = Math.min(width, height) / diameter;
+  assert.ok(fill >= 0.62 - 1e-6,
+    `a 16:9 cover fills only ${fill.toFixed(3)} of the label's diameter, so most `
+    + 'of what is on screen is its own reflection');
+  // But not so far that the clipping becomes the story.
+  assert.ok(Math.max(width, height) / diameter <= 1.25,
+    `the cover is scaled to ${(Math.max(width, height) / diameter).toFixed(2)} of `
+    + 'the diameter, so its long edges are mostly clipped away');
+
+  // A square cover must be untouched by that floor: the diagonal fit already
+  // exceeds it, so this change is only ever about wide images.
+  {
+    const squareContext = recordingContext();
+    const square = new VinylVisual(canvasWith(squareContext));
+    square.label = { naturalWidth: 640, naturalHeight: 640 };
+    square.render(score, 4);
+    const squareDraws = squareContext.calls.filter(([name]) => name === 'drawImage');
+    const [, , , , , , , , sw2, sh2] = squareDraws[squareDraws.length - 1];
+    const squareClip = squareContext.calls.slice(
+      0, squareContext.calls.findIndex(([name]) => name === 'clip'),
+    ).reverse().find(([name]) => name === 'arc');
+    assert.ok(Math.abs(Math.hypot(sw2, sh2) - squareClip[3] * 2) < 1e-6,
+      'a square cover is no longer inscribed exactly - the fill floor should '
+      + 'never reach it');
+  }
 
   // The mirrors sit exactly one image away, so each shares an edge with the
   // original rather than overlapping it or leaving a gap.
@@ -430,7 +464,7 @@ console.log(`visuals: ${checked}/${checked} pass (score-locked, partial scores s
       `no mirror at ${expected}; the segment beside that edge stays empty`);
   }
 
-  console.log('vinyl label: 10/10 pass (whole cover inscribed, mirrors on every edge)');
+  console.log('vinyl label: 13/13 pass (dead space trimmed, wide covers not left as strips)');
 }
 
 // --- The palette must survive a negative cycle -------------------------------

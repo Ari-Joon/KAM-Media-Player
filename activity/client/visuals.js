@@ -1035,12 +1035,125 @@ export class KaleidoscopeVisual extends Canvas2DVisual {
  * spectrum modulates how strongly each radial zone catches the sheen, the beat
  * drives the rotation, and bass tilts the whole platter.
  */
+/**
+ * Smallest fraction of the label's diameter the artwork's short side may cover.
+ *
+ * Inscribing by the diagonal shows every pixel, and on a wide image it shows
+ * them very small: a 16:9 thumbnail's short side lands at 0.49 of the diameter,
+ * so half the label is mirror and the picture reads as a strip laid across it.
+ * A square cover reaches 0.71 and looks right, which is roughly the target.
+ *
+ * 0.62 is the compromise. It leaves a square cover exactly as it was - the
+ * diagonal fit already exceeds this, so nothing changes - and scales a 16:9 one
+ * up by a quarter, spending about 9% off each side to do it. Losing a sliver of
+ * the far edges of a video still is a much smaller loss than the subject being
+ * half the size it should be.
+ */
+const MIN_LABEL_FILL = 0.62;
+
+/**
+ * The rectangle of an image that is actually picture rather than dead space.
+ *
+ * Video thumbnails are letterboxed and pillarboxed constantly: a 4:3 or vertical
+ * source delivered in a 16:9 frame arrives with flat bars baked into the pixels.
+ * Inscribing that treats the bars as content, so the picture is pushed smaller
+ * to make room for them - and then the bars get *mirrored* outward into the
+ * disc, which is where the strangeness comes from. The bars are part of the
+ * file, so nothing but looking at the pixels can find them.
+ *
+ * Sampled at low resolution because bars are enormous relative to any detail: a
+ * bar that survives a downscale to 64 pixels is a real bar, and one that does
+ * not was never worth trimming.
+ *
+ * @param {CanvasImageSource} image
+ * @returns {{x: number, y: number, width: number, height: number}|null} Null
+ *   when the image cannot be read, which is the caller's cue to use all of it.
+ */
+export function contentBox(image) {
+  const iw = image.naturalWidth || image.width || 0;
+  const ih = image.naturalHeight || image.height || 0;
+  if (!iw || !ih) return null;
+
+  const SAMPLE = 64;
+  const scale = SAMPLE / Math.max(iw, ih);
+  const w = Math.max(1, Math.round(iw * scale));
+  const h = Math.max(1, Math.round(ih * scale));
+
+  let data;
+  try {
+    const surface = typeof OffscreenCanvas === 'function'
+      ? new OffscreenCanvas(w, h)
+      : Object.assign(document.createElement('canvas'), { width: w, height: h });
+    const context = surface.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(image, 0, 0, w, h);
+    data = context.getImageData(0, 0, w, h).data;
+  } catch {
+    // A tainted canvas or an unreadable image. The whole picture is a perfectly
+    // good answer; it is only the trim that is lost.
+    return null;
+  }
+
+  // A bar is flat and dark. Both conditions, because a genuinely dark scene is
+  // not flat and a bright flat edge is usually part of the design.
+  const BAR_LEVEL = 26;
+  const BAR_SPREAD = 12;
+  const rowIsBar = (y) => {
+    let low = 255;
+    let high = 0;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const value = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      if (value < low) low = value;
+      if (value > high) high = value;
+    }
+    return high <= BAR_LEVEL && high - low <= BAR_SPREAD;
+  };
+  const columnIsBar = (x) => {
+    let low = 255;
+    let high = 0;
+    for (let y = 0; y < h; y++) {
+      const i = (y * w + x) * 4;
+      const value = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      if (value < low) low = value;
+      if (value > high) high = value;
+    }
+    return high <= BAR_LEVEL && high - low <= BAR_SPREAD;
+  };
+
+  let top = 0;
+  let bottom = h - 1;
+  let left = 0;
+  let right = w - 1;
+  while (top < bottom && rowIsBar(top)) top++;
+  while (bottom > top && rowIsBar(bottom)) bottom--;
+  while (left < right && columnIsBar(left)) left++;
+  while (right > left && columnIsBar(right)) right--;
+
+  // Only trimmed from the edges inward, so a picture that is dark all over
+  // cannot collapse to nothing: if the walk ate most of the frame it was
+  // reading the subject rather than a bar, and the whole image is used.
+  const keptW = (right - left + 1) / w;
+  const keptH = (bottom - top + 1) / h;
+  if (keptW < 0.5 || keptH < 0.5) return null;
+
+  const inverse = 1 / scale;
+  return {
+    x: Math.round(left * inverse),
+    y: Math.round(top * inverse),
+    width: Math.round((right - left + 1) * inverse),
+    height: Math.round((bottom - top + 1) * inverse),
+  };
+}
+
 export class VinylVisual extends Canvas2DVisual {
   constructor(canvas) {
     super(canvas);
     this.angle = 0;
     this.dust = null;
     this.label = null;
+    /** Picture rectangle within `label`, once the dead space is trimmed. */
+    this.labelBox = null;
     /** Pre-rendered disc: grooves, dust and body, none of which change. */
     this.disc = null;
   }
@@ -1136,12 +1249,17 @@ export class VinylVisual extends Canvas2DVisual {
    */
   setTrack(track) {
     this.label = null;
+    this.labelBox = null;
     if (!track?.thumbnail) return;
     const image = new Image();
     image.crossOrigin = 'anonymous';
     image.addEventListener('load', () => {
       // Guard against a track change during the load.
-      if (this.trackId === track.providerId) this.label = image;
+      if (this.trackId !== track.providerId) return;
+      this.label = image;
+      // Measured once per track, not per frame: it reads pixels back, which is
+      // the one genuinely expensive thing this visualisation does.
+      this.labelBox = contentBox(image);
     });
     this.trackId = track.providerId;
     image.src = `/api/image?url=${encodeURIComponent(track.thumbnail)}`;
@@ -1282,8 +1400,19 @@ export class VinylVisual extends Canvas2DVisual {
       context.beginPath();
       context.arc(0, 0, labelRadius, 0, Math.PI * 2);
       context.clip();
-      const iw = this.label.naturalWidth || this.label.width || 1;
-      const ih = this.label.naturalHeight || this.label.height || 1;
+      // The picture, not the file: `labelBox` excludes any letterbox or
+      // pillarbox bars baked into the thumbnail. Treating those as content
+      // shrinks the real picture to make room for them and then mirrors the
+      // bars outward into the disc, which is most of why a wide thumbnail
+      // looked wrong here.
+      const box = this.labelBox ?? {
+        x: 0,
+        y: 0,
+        width: this.label.naturalWidth || this.label.width || 1,
+        height: this.label.naturalHeight || this.label.height || 1,
+      };
+      const iw = box.width;
+      const ih = box.height;
 
       // The whole cover, inscribed, with the gaps mirrored.
       //
@@ -1309,11 +1438,23 @@ export class VinylVisual extends Canvas2DVisual {
       // into the disc instead of ending at a hard edge. The corners need
       // nothing: with them on the circle, every point inside the circle but
       // outside the picture is past exactly one edge.
-      const fit = (labelRadius * 2) / Math.hypot(iw, ih);
+      // Inscribed by the diagonal, unless that leaves the picture too small.
+      //
+      // The diagonal fit puts all four corners on the circle and shows every
+      // pixel, which is right for a square cover and much too timid for a wide
+      // one - a 16:9 thumbnail ends up 0.49 of the diameter tall against a
+      // square's 0.71, so the label reads as a strip of picture surrounded by
+      // its own reflection. `MIN_LABEL_FILL` is the floor under that, and it
+      // costs a little off the long edges to buy it.
+      const diagonalFit = (labelRadius * 2) / Math.hypot(iw, ih);
+      const minorFit = (labelRadius * 2 * MIN_LABEL_FILL) / Math.min(iw, ih);
+      const fit = Math.max(diagonalFit, minorFit);
       const width = iw * fit;
       const height = ih * fit;
       const paint = () => context.drawImage(
-        this.label, -width / 2, -height / 2, width, height,
+        this.label,
+        box.x, box.y, box.width, box.height,
+        -width / 2, -height / 2, width, height,
       );
 
       // Mirrors first, so the true image lands on top of its own reflections
