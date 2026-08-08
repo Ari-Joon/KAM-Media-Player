@@ -20,6 +20,10 @@ Two things worth doing before you capture:
 - **Play something with a real dynamic range.** Most of these are driven by the
   energy and spectrum lanes, so a quiet passage makes a good visualisation look
   broken.
+- **Give the ones that accumulate some time.** Painter, Terrain and Tunnel all
+  build from what has already played, so a capture ten seconds in shows an empty
+  canvas, flat ground and an empty tunnel. Painter in particular is a function
+  of *position*: about two thirds through is when the picture is worth showing.
 - **Let the analyser finish.** The first 0.21 s of a new track is a provisional
   score built from the opening 45 seconds; the full one lands about two seconds
   later and is what the visual is actually designed against.
