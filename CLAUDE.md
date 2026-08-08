@@ -64,6 +64,39 @@ class method or a template literal.
 parses, not that your change is in it. Re-read the changed region, or grep for
 the new symbol, before claiming the work is done.
 
+## A green suite is not evidence
+
+**The bugs that survive here are the ones the tests cannot see.** The suite
+proves a renderer does not throw and a function returns. It cannot hear a
+crossfade, look at a label, or notice that a success message is reporting
+nonsense. Every defect found on 7 August 2026 needed a measurement built
+specially to catch it, and not one was findable by reading the code:
+
+- The crossfade produced output **byte-identical to no crossfade**. `acrossfade`
+  fades the end of its first input, and untrimmed that is the end of the *file*
+  rather than the join. Caught by rendering the graph and measuring its RMS
+  envelope: 0.264 flat before, 0.244 → 0.026 after.
+- The lyrics pass logged `4 words` and looked like a success. Voice-activity
+  detection had discarded the whole track — `VAD filter removed 06:06.922 of
+  audio` — and a count above zero passed every check there was.
+- A palette crash presented as *"the visual snaps back to Painter between
+  songs"*. It was `PALETTES[-1]`: a negative remainder stays negative in
+  JavaScript, and the render guard was substituting the default exactly as
+  designed. The symptom pointed nowhere near the cause.
+- Vinyl cropped the artwork twice in opposite directions and rendered happily
+  throughout.
+
+So: **build the thing that would prove it, then put the number in the commit
+message and the comment.** Render the ffmpeg graph and measure it. Count the
+frames matching a geometric predicate, before and after. Diff two runs. If a
+change is audible or visible, a passing suite says only that nothing threw —
+ask for a screenshot.
+
+The corollary is about reports, not code. A symptom described in user terms is
+an accurate observation of *behaviour* and a poor guide to *location*. Twice the
+described symptom was several layers from the cause. Go and measure; do not
+start where the symptom points.
+
 ## Testing visualisations
 
 Use a stubbed canvas and a **manually advanced clock**.
