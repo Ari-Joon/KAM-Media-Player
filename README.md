@@ -4,21 +4,28 @@
 Activity and voice bot with a shared queue, shared controls, and eighteen
 visualisations that run off a real analysis of the track.
 
-I built this because listening to music with friends in a call is a flat
-experience. Somebody queues a song, everyone hears it, and there is nothing on
-screen but a text channel. Every bot I tried was a queue with a progress bar,
-and the visualisers that do exist bounce to whatever the browser hears rather
-than to the music itself.
+I built this for the jam sessions. Putting music on with friends in a call
+should feel like everyone is in the same room around the same speaker, and
+instead it is a queue with a progress bar and a text channel to stare at. The
+song is shared but the experience is not.
+
+What I kept coming back to was Windows Media Player. Not the player, the
+visualisers - you would put an album on, go full screen, and watch it. The music
+was doing something to the screen and you would just sit there with it. Nobody
+makes that any more, and nothing makes it for a room of people at once.
 
 ![Painter, most of the way through a track](docs/img/painter.png)
 
-The catch with visualising audio in Discord is that everyone is watching at
-once. If the animation is driven by each person's browser clock, everybody sees
-a different picture, it keeps moving while the track is paused, and a seek
-desyncs the room. So nothing here reads the wall clock. A Python worker analyses
-the track once into beats, downbeats, sections and sixteen spectrum bands, and
-every visualisation indexes that by playback position. Same song, same second,
-same picture, on every screen in the call.
+The catch with doing that in Discord is that everyone is watching at the same
+time. Drive the animation from each person's browser clock and everybody sees a
+different picture, it carries on moving while the track is paused, and one seek
+desyncs the whole room. So nothing here reads the wall clock. A Python worker
+analyses the track once into beats, downbeats, sections and sixteen spectrum
+bands, and every visualisation indexes that by playback position instead. Same
+song, same second, same picture, on every screen in the call.
+
+That is the whole idea: press play, go full screen, and everyone is watching the
+same thing.
 
 ![Stick Men, dancing to the beat grid](docs/img/stickmen.png)
 
@@ -182,5 +189,6 @@ improvements are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), and run
 - [LICENSE](LICENSE): AGPL-3.0 licence for this source code
 - [LICENSING.md](LICENSING.md): what the licence permits, and commercial terms
 
-Discord, YouTube, SoundCloud, Apple Music, and Spotify are trademarks of their
-respective owners. KAM Media Player is not affiliated with or endorsed by them.
+Discord, YouTube, SoundCloud, Apple Music, Spotify and Windows Media Player are
+trademarks of their respective owners. KAM Media Player is not affiliated with
+or endorsed by any of them, and is not a Microsoft product.
