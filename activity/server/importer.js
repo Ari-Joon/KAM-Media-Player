@@ -102,7 +102,18 @@ async function readYouTubePlaylist(id) {
       ...(pageToken ? { pageToken } : {}),
     }).toString();
 
-    const response = await fetch(url);
+    // Unlike a single link, a playlist cannot be resolved by extraction - only
+    // the API can enumerate it - so a transport fault is genuinely fatal here.
+    // It is still converted, because a raw `TypeError: fetch failed` tells the
+    // user nothing about which service was unreachable.
+    let response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(
+        `Could not reach YouTube: ${error.cause?.code ?? error.message}.`,
+      );
+    }
     if (!response.ok) {
       throw new Error(response.status === 404
         ? 'That playlist is private or does not exist.'

@@ -129,6 +129,61 @@ function run(command, args, timeoutMs = 120_000) {
 // --- YouTube ----------------------------------------------------------------
 
 /**
+ * Fetch a video's title, channel and duration with yt-dlp instead of the API.
+ *
+ * The Data API contributes nothing to a pasted link except those three fields;
+ * the audio has always come from yt-dlp regardless. So an API outage need not
+ * make a link unplayable, and this is the path taken when it happens.
+ *
+ * @param {string} videoId Eleven-character YouTube ID.
+ * @returns {Promise<object>} Track descriptor.
+ */
+async function youtubeViaExtraction(videoId) {
+  const link = `https://www.youtube.com/watch?v=${videoId}`;
+  const raw = await run(YTDLP_BIN, [
+    '--quiet', '--no-warnings', '--no-playlist', '--dump-single-json',
+    // yt-dlp's own backoff absorbs the transient 5xx responses without paying
+    // for a second process, the same way the SoundCloud path does.
+    '--retries', '3', '--extractor-retries', '3',
+    link,
+  ], 60_000);
+
+  const info = JSON.parse(raw);
+  if (!info?.id) throw new Error('That video is unavailable, private or region-locked.');
+
+  return {
+    provider: 'youtube',
+    providerId: info.id,
+    title: info.title ?? 'Untitled',
+    // `uploader` is the channel name, which is what the API returns as
+    // `channelTitle`. Matching it keeps artist lookups and cache keys identical
+    // whichever path resolved the track.
+    artist: info.uploader ?? info.channel ?? 'Unknown',
+    url: info.webpage_url ?? link,
+    durationSec: Math.round(info.duration ?? 0),
+  };
+}
+
+/**
+ * Try extraction after the Data API has failed, keeping the original reason.
+ *
+ * Without this the user is told why yt-dlp failed and never learns that the
+ * quota ran out, which points any investigation at the wrong subsystem.
+ *
+ * @param {string} videoId Eleven-character YouTube ID.
+ * @param {string} reason Why the API call did not work.
+ * @returns {Promise<object>} Track descriptor.
+ */
+async function linkViaExtraction(videoId, reason) {
+  log.info(`${reason} Resolving the link by extraction instead.`);
+  try {
+    return await youtubeViaExtraction(videoId);
+  } catch (error) {
+    throw new Error(`${reason} Extraction also failed: ${error.message}`);
+  }
+}
+
+/**
  * Resolve free text or a link to a YouTube track.
  *
  * A pasted link uses `videos.list` at 1 quota unit; free text needs
@@ -138,13 +193,20 @@ function run(command, args, timeoutMs = 120_000) {
  * @returns {Promise<object>} Track descriptor.
  */
 async function resolveYouTube(input) {
+  const videoId = parseYouTubeId(input);
+
+  // A pasted link needs no API key at all: the ID is already in the URL, and
+  // extraction supplies the same three fields `videos.list` would have. Only
+  // free text genuinely requires the key, because turning words into an ID is
+  // what `search.list` is for.
   if (!YOUTUBE_API_KEY) {
+    if (videoId) return youtubeViaExtraction(videoId);
     throw new Error(
-      'YouTube lookup is disabled because YOUTUBE_API_KEY is not configured. '
-      + 'Use a SoundCloud link or add a key for development.',
+      'YouTube search is disabled because YOUTUBE_API_KEY is not configured. '
+      + 'Paste a YouTube or SoundCloud link, or add a key for development.',
     );
   }
-  const videoId = parseYouTubeId(input);
+
   const url = new URL(videoId
     ? 'https://www.googleapis.com/youtube/v3/videos'
     : 'https://www.googleapis.com/youtube/v3/search');
@@ -156,11 +218,28 @@ async function resolveYouTube(input) {
         videoCategoryId: '10', maxResults: '1', key: YOUTUBE_API_KEY,
       }).toString();
 
-  const response = await fetch(url);
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    // A transport fault, not an answer from the API. This is the exact failure
+    // that made a working link unplayable: one dropped TLS handshake to
+    // googleapis.com escaped as a raw `TypeError: fetch failed` and the track
+    // never reached the extractor that could have resolved it unaided.
+    const reason = `Could not reach YouTube: ${error.cause?.code ?? error.message}.`;
+    if (videoId) return linkViaExtraction(videoId, reason);
+    throw new Error(reason);
+  }
+
   if (!response.ok) {
-    throw new Error(response.status === 403
+    const reason = response.status === 403
       ? 'The YouTube quota is used up for today. It resets at midnight Pacific.'
-      : `YouTube lookup failed (${response.status}).`);
+      : `YouTube lookup failed (${response.status}).`;
+    // Quota is the common case here, and it is a limit on the *metadata* API
+    // rather than on playback, so a link should still play once the daily
+    // hundred searches are gone.
+    if (videoId) return linkViaExtraction(videoId, reason);
+    throw new Error(reason);
   }
 
   const { items = [] } = await response.json();
