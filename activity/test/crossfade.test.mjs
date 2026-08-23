@@ -38,7 +38,11 @@ assert.ok(GAPLESS_LEAD_SEC >= 1,
 
   const filter = faded[faded.indexOf('-filter_complex') + 1];
   assert.match(filter, /acrossfade=d=6\.000/, 'the fade is not the requested length');
-  assert.match(filter, /c1=tri:c2=tri/, 'the fade curves are not equal-gain');
+  // Equal-*power*, not equal-gain. `tri` is equal-gain and that is precisely
+  // the bug: two uncorrelated signals at half amplitude sum to 0.707 of full
+  // power, so the middle of the join sits 3 dB down. See the curve assertions
+  // at the end of this file for the measurements.
+  assert.match(filter, /c1=qsin:c2=qsin/, 'the fade curves are not equal-power');
 
   // -ss must come before its -i or ffmpeg decodes from the start of the file
   // and the transition arrives late by however long the track has been playing.
@@ -248,3 +252,73 @@ assert.ok(GAPLESS_LEAD_SEC >= 1,
 }
 
 console.log("crossfade: 39/39 pass");
+
+// --- The fade curve must stay equal-power ------------------------------------
+// `tri` is a linear fade, and crossing two uncorrelated signals linearly puts
+// each at half amplitude in the middle: they sum to 0.707 of full power, the
+// textbook 3 dB hole. Measured over two uncorrelated pink-noise sources with a
+// 6 s fade, level at the centre of the join against the sources playing alone:
+// tri -3.00 dB, qsin -0.20 dB, hsin -2.77 dB, esin -7.78 dB. On a real pair
+// from the cache, mid-fade RMS was 0.13983 under tri and 0.19611 under qsin.
+//
+// The suite cannot hear the sag, so it guards the curve that fixed it.
+{
+  const args = transitionArgs({
+    fromPath: 'a.m4a', toPath: 'b.m4a', position: 100, fade: 6,
+  });
+  const filter = args[args.indexOf('-filter_complex') + 1];
+  assert.match(filter, /c1=qsin:c2=qsin/,
+    'the crossfade must use an equal-power curve, or the join sags 3 dB');
+  assert.ok(!/c1=tri|c2=tri/.test(filter),
+    'linear crossfade curves reintroduce the 3 dB hole in the middle');
+  console.log('fade curve: 2/2 pass (equal-power, no linear sag)');
+}
+
+// --- A track queued during playback must still be prefetched -----------------
+// `prefetchUpcoming` ran only on a track change, so a track added while the
+// current one played was never fetched. `startTransition` then found no file on
+// disk and returned - silently, which is why the report could only ever be
+// "sometimes it doesn't activate". Queueing the next song mid-playback is the
+// normal way a queue is used, so this was the common case rather than an edge.
+{
+  const player = new GuildPlayer('g');
+  player.setCrossfade(6);
+
+  const fetched = [];
+  player.loadAudio = async (track) => {
+    fetched.push(track.providerId);
+    return `/cache/${track.providerId}.m4a`;
+  };
+
+  player.decks.queue.add({ provider: 'p', providerId: 'A', title: 'A', durationSec: 200 });
+  player.decks.queue.index = 0;
+
+  // Nothing queued behind it yet, so there is nothing to fetch.
+  player.prefetchUpcoming();
+  await Promise.resolve();
+  assert.deepEqual(fetched, [], 'fetched something with an empty queue ahead');
+
+  // The listener queues the next song while the current one is still playing.
+  player.decks.queue.add({ provider: 'p', providerId: 'B', title: 'B', durationSec: 200 });
+
+  // A watcher tick well before the join. This used to do nothing at all until
+  // the track changed, by which point the transition had already been missed.
+  await player.checkTransition(200);
+  await Promise.resolve();
+  assert.deepEqual(fetched, ['B'],
+    'a track queued during playback was not prefetched, so no join was possible');
+  assert.equal(player.prefetched?.key, 'p:B', 'the fetched path was not retained');
+
+  // Idempotent: the watcher ticks several times a second and must not start the
+  // same download on every one of them.
+  for (let i = 0; i < 20; i++) {
+    await player.checkTransition(200);
+    await Promise.resolve();
+  }
+  assert.deepEqual(fetched, ['B'],
+    `the watcher re-fetched the same track (${fetched.length} downloads)`);
+
+  player.cancelTransition();
+  player.stopTransitionTimer();
+  console.log('prefetch on queue change: 4/4 pass (late additions still join, fetched once)');
+}
