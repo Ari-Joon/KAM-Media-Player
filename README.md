@@ -131,7 +131,8 @@ the need to keep PowerShell open; it does not remove the server.
 
 - Node.js 22.12 or newer
 - Python 3.10 or newer
-- ffmpeg and yt-dlp on `PATH`
+- ffmpeg and yt-dlp on `PATH`, with yt-dlp kept current - see
+  [Troubleshooting](#troubleshooting)
 - A Discord application with Activities enabled
 - Optional: YouTube Data API v3 key. Without it, free-text search uses
   SoundCloud and YouTube lookup is disabled.
@@ -168,6 +169,60 @@ cloudflared tunnel --url http://localhost:3000
 Map the generated hostname to `/` under **Activities → URL Mappings** in the
 Discord Developer Portal. A detailed permanent-hosting path is in
 [DEPLOY.md](DEPLOY.md).
+
+## Troubleshooting
+
+### A track resolves but will not play
+
+Almost always a stale yt-dlp. YouTube requires a solved JavaScript challenge to
+sign the audio URL, and an out-of-date binary cannot solve it, so the request
+comes back refused:
+
+```
+ERROR: unable to download video data: HTTP Error 403: Forbidden
+```
+
+Metadata lookup is unaffected, which is what makes this confusing. The track
+resolves, gets a title and a duration, joins the queue, and only dies at
+playback, so it reads as a fault in the player rather than in the fetch.
+
+Update it and try again:
+
+```powershell
+cd "C:\Projects\Discord Media Player"
+python -m pip install -U yt-dlp
+```
+
+Measured on 23 August 2026: version 2026.07.04 returned a flat 403 on every
+video tried, including ones unrelated to the track being reported. 2026.08.19
+downloaded the same URL without complaint. Seven weeks of staleness was enough
+to break YouTube audio completely, so update before investigating anything
+else.
+
+No restart is needed. The server runs `yt-dlp` from `PATH` on every fetch, so it
+picks up a new binary immediately.
+
+yt-dlp may still warn that its challenge solver script is missing and that some
+formats are unavailable. That is survivable because it falls back to a format
+needing no signature, but it is the same failure waiting to happen again. The
+[EJS notes](https://github.com/yt-dlp/yt-dlp/wiki/EJS) cover the solver
+options, one of which downloads and runs a script from yt-dlp's own repository.
+
+### The Activity is a white screen
+
+The tunnel hostname changed. A Cloudflare quick tunnel mints a new address every
+restart and the Developer Portal is still pointing at the last one. Copy the
+address the launcher prints into **Activities → URL Mappings** and set the root
+mapping to it. `TUNNEL_PROVIDER` in `.env` gives a stable address instead; see
+[DEPLOY.md](DEPLOY.md).
+
+### Searches fail but pasted links work
+
+The YouTube Data API key is missing, out of quota, or unreachable. Free text
+needs that key, because turning words into a video ID is what the search
+endpoint is for, and a search failure falls through to SoundCloud. A pasted link
+needs no key at all, since the ID is already in the URL. The daily allowance is
+roughly a hundred searches and resets at midnight Pacific.
 
 ## Contributing
 
