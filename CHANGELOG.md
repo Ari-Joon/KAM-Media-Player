@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.2 - 2026-08-23
+
+The other half of the 0.9.1 fix: the path a pasted link actually takes.
+
+### Fixed
+
+- **A pasted YouTube link no longer depends on the Data API.** 0.9.1 stopped a
+  network fault from killing *search*, but a link is resolved somewhere else
+  entirely, and that call was still unguarded - so the original
+  `TypeError: fetch failed` still took a working link down. The API supplies
+  only title, channel and duration for a link whose ID is already in the URL,
+  and yt-dlp fetches the audio regardless, so the extractor can supply the same
+  three fields. A link now falls through to extraction on a transport fault, on
+  quota, and on any other error, keeping the original reason in the message.
+- **A YouTube link no longer needs an API key.** The key exists to turn free
+  text into a video ID; a link already has one. Refusing links on a deployment
+  without the optional key was an unnecessary restriction.
+- Playlist imports name the unreachable service instead of surfacing a raw
+  `TypeError`. Only the API can enumerate a playlist, so the fault is still
+  fatal there - it is just legible now.
+
 ## 0.9.1 - 2026-08-08
 
 A single fix, for a fault that should have cost nothing.
