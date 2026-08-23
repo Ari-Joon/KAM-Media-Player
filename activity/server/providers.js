@@ -805,13 +805,28 @@ export async function searchTracks(query, limit = 5) {
   try {
     return await searchYouTube(query, limit);
   } catch (error) {
-    // Quota exhaustion is the common failure and it lasts until midnight
-    // Pacific. Falling back keeps the bot usable rather than dead for hours.
-    if (/quota/i.test(error.message)) {
-      console.log('YouTube quota exhausted; searching SoundCloud instead.');
-      return searchSoundCloud(query, limit);
+    // Fall back on *any* YouTube failure, not only on quota.
+    //
+    // This tested `/quota/i` and rethrew everything else, which meant a
+    // transient network fault took search down completely while SoundCloud sat
+    // there working. One dropped TLS handshake to googleapis.com surfaced to
+    // the user as `TypeError: fetch failed` and no way to play anything.
+    //
+    // YouTube is the optional provider here - it needs an API key, and without
+    // one this function goes straight to SoundCloud anyway. So there is no
+    // failure of it worth passing to the user in preference to a working
+    // search: quota, network, an outage or no results all have the same better
+    // answer, which is to ask the other provider.
+    log.info(`YouTube search failed (${error.message}) - trying SoundCloud.`);
+    try {
+      return await searchSoundCloud(query, limit);
+    } catch (fallbackError) {
+      // Both are down, so report both. Reporting only the second would hide
+      // the reason the first was skipped.
+      throw new Error(
+        `${error.message} SoundCloud also failed: ${fallbackError.message}`,
+      );
     }
-    throw error;
   }
 }
 
@@ -829,7 +844,17 @@ async function searchYouTube(query, limit = 5) {
     videoCategoryId: '10', maxResults: String(limit), key: YOUTUBE_API_KEY,
   }).toString();
 
-  const response = await fetch(url);
+  // Network faults are converted rather than left to escape as
+  // `TypeError: fetch failed`. A DNS failure, a dropped TLS handshake or a
+  // reset socket says nothing about YouTube and everything about the link to
+  // it, and the raw TypeError reached the user as a stack trace.
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    throw new Error(`Could not reach YouTube: ${error.cause?.code ?? error.message}.`);
+  }
+
   if (!response.ok) {
     throw new Error(response.status === 403
       ? 'The YouTube quota is used up for today. It resets at midnight Pacific.'
