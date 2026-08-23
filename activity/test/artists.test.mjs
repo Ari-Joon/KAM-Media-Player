@@ -63,3 +63,45 @@ assert.ok(performerCount({
   title: 'A & B & C & D & E & F & G & H & I - Song', artist: 'X',
 }) <= 7, 'cast size is capped');
 console.log('performerCount edge cases: 5/5 pass');
+
+// --- A title with no dash must not credit the uploader ----------------------
+//
+// Lyrics channels title uploads `ARTIST 'SONG' lyrics`. The artist part was
+// only ever taken from before a dash, so these fell through to the channel
+// name: MusicBrainz was asked about "Regular ccl" rather than KATSEYE and
+// answered one member, putting a six-piece group on stage as a solo act.
+//
+// Measured 23 August 2026 against the live lookup: `["katseye"]` returns 6 and
+// `["regular ccl"]` returns 1, so the lookup was never the faulty part.
+
+assert.deepEqual(
+  creditedArtists("KATSEYE 'That way' lyrics (Color coded lyrics)", 'Regular ccl'),
+  ['katseye'],
+  'a quoted song title must credit the artist, not the lyrics channel',
+);
+
+assert.deepEqual(
+  creditedArtists('KATSEYE "Touch" lyrics', 'SomeChannel'),
+  ['katseye'],
+  'double quotes are the same convention as single quotes',
+);
+
+// The opening quote must follow whitespace. Without that requirement an
+// apostrophe inside a word opens one, and this parses as artist "Don" with
+// song "t Stop Believin" - which is why the rule is not simply /['"]/.
+for (const [title, channel] of [
+  ["Journey - Don't Stop Believin'", 'Journey'],
+  ["Don't Stop Believin'", 'Journey'],
+]) {
+  assert.deepEqual(creditedArtists(title, channel), ['journey'],
+    `an apostrophe must not open a quoted song title: ${title}`);
+}
+
+// A dashed title is unaffected: that branch is still preferred.
+assert.deepEqual(
+  creditedArtists('KATSEYE - Hootie Frutti (Lyrics)', 'Vibe Music'),
+  ['katseye'],
+  'the dash branch must still win when a dash is present',
+);
+
+console.log('quoted song titles: 5/5 pass (uploader no longer credited)');

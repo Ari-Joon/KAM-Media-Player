@@ -76,9 +76,18 @@ export function creditedArtists(title = '', artist = '') {
   // Only the part before a dash is the artist list; after it is the song name.
   // Everything before the first dash is the artist list; after it is the song
   // name, which must not be mined for names.
-  let artistPart = cleanTitle.includes(' - ')
-    ? cleanTitle.slice(0, cleanTitle.indexOf(' - '))
-    : '';
+  let artistPart = '';
+  if (cleanTitle.includes(' - ')) {
+    artistPart = cleanTitle.slice(0, cleanTitle.indexOf(' - '));
+  } else {
+    // Lyrics channels title uploads `ARTIST 'SONG' lyrics`, with no dash
+    // anywhere. The artist part was left empty for those, so the uploader
+    // became the credited performer: MusicBrainz was asked about "Regular ccl"
+    // instead of KATSEYE and answered 1, and a six-piece group danced as a solo
+    // act. Asked the right name it answers 6, so the lookup was never at fault.
+    const quoted = cleanTitle.match(QUOTED_SONG);
+    if (quoted) artistPart = quoted[1];
+  }
   // A trailing feature credit can sit inside the artist part when there is no
   // dash at all; remove it so it is not counted twice.
   artistPart = artistPart.replace(/\s+(?:ft|feat|featuring)\.?\s*.+$/i, '');
@@ -108,6 +117,16 @@ export function creditedArtists(title = '', artist = '') {
   }
   return [...names];
 }
+
+/**
+ * `ARTIST 'SONG'`, the form lyrics channels use when there is no dash.
+ *
+ * The opening quote has to follow whitespace, or an apostrophe inside a word
+ * opens one: without that, "Don't Stop Believin'" parses "t Stop Believin" as
+ * the song and "Don" as the artist.
+ */
+const QUOTED_SONG =
+  /^([^'"\u2018\u201c]{2,40}?)\s+['"\u2018\u201c][^'"\u2019\u201d]+['"\u2019\u201d]/;
 
 /**
  * Names that denote a group rather than one person.

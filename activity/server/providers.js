@@ -161,6 +161,7 @@ async function youtubeViaExtraction(videoId) {
     artist: info.uploader ?? info.channel ?? 'Unknown',
     url: info.webpage_url ?? link,
     durationSec: Math.round(info.duration ?? 0),
+    thumbnail: info.thumbnail ?? null,
   };
 }
 
@@ -257,6 +258,11 @@ async function resolveYouTube(input) {
     artist: items[0].snippet.channelTitle,
     url: `https://www.youtube.com/watch?v=${id}`,
     durationSec: parseIsoDuration(items[0].contentDetails?.duration),
+    // Searched tracks have always carried this and pasted links never did, so
+    // Painter had no pixels to sample from and fell back to a regional palette
+    // on every link. It reads as the visualisation being broken rather than as
+    // a missing field two layers away.
+    thumbnail: items[0].snippet.thumbnails?.medium?.url ?? null,
   };
 }
 
