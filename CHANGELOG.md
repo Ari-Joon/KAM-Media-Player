@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.4 - 2026-08-23
+
+Crossfade actually crossfades, and the stick men stop putting a hand through
+their own head.
+
+### Fixed
+
+- **The crossfade no longer sags in the middle.** The fade curve was `tri`, a
+  linear fade, and crossing two uncorrelated signals linearly puts each at half
+  amplitude at the centre, summing to 0.707 of full power - a 3 dB hole. Over
+  two uncorrelated pink-noise sources with a 6 s fade the centre of the join
+  measured -3.00 dB under `tri` and -0.20 dB under `qsin`. Confirmed on a real
+  pair with only the curve changed: mid-fade RMS 0.13983 against 0.19611, so
+  the join holds 2.93 dB more level. Peak moved 0.9153 to 0.9427 with no sample
+  at full scale, so the limiter still has room.
+- **A track queued during playback is now prefetched, so the join can happen.**
+  The prefetch ran only on a track change, so anything added while the current
+  song played was never fetched and the transition found no file on disk.
+  Queueing the next song mid-playback is the normal way a queue is used, which
+  is why the crossfade appeared to work only sometimes.
+- **A transition that does not happen now says so.** All three bail-outs
+  returned in silence, so the only available report was that it sometimes did
+  not activate. Each now names the condition that stopped it.
+- **Stick men: hands stop merging into the head.** The original clearance met
+  its brief - a 15% reduction in hands *beside* the head - and still looked
+  wrong, because what the eye registers is the hand *inside* the head circle.
+  0.45 removed only a third of those. Swept over a six-figure cast at 60fps:
+  merging runs 2.225% with the clearance off, 1.481% at 0.45 and 0.345% at
+  0.75. Raised to 0.75, which cuts merging 4.3x while 8.36% of hands still pass
+  beside the head, so the arm is pushed off rather than forbidden.
+
 ## 0.9.3 - 2026-08-23
 
 Artwork and artist credits on pasted links, and a troubleshooting section for
