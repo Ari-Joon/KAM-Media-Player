@@ -13,7 +13,7 @@ profile and avoid including secrets or personal data in ordinary chat.
 
 ## Current trust boundary
 
-Version 0.9.2 is intended for personal use and otherwise trusted Discord
+Version 0.9.3 is intended for personal use and otherwise trusted Discord
 servers. It is not approved for a public, discoverable deployment.
 
 ### What is enforced now

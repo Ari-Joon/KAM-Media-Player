@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.3 - 2026-08-23
+
+Artwork and artist credits on pasted links, and a troubleshooting section for
+the failure every self-hoster will eventually hit.
+
+### Fixed
+
+- **A pasted link now carries its artwork.** `resolveYouTube` never returned a
+  thumbnail. Searched tracks always had one and links never did, so Painter had
+  no pixels to sample and produced an abstract from a regional palette instead
+  of an oil rendition of the cover.
+- **A title with no dash credits the artist rather than the uploader.** The
+  artist was only ever read from before a dash, so `KATSEYE 'That way' lyrics`
+  by the channel "Regular ccl" asked MusicBrainz about the lyrics channel.
+  Measured against the live lookup: `katseye` returns 6 members and
+  `regular ccl` returns 1, so the lookup was never at fault. A six-piece group
+  danced as a solo act. Titles of the form `ARTIST 'SONG'` are now parsed, with
+  the opening quote required to follow whitespace so an apostrophe inside a
+  word cannot open one.
+
+### Documentation
+
+- **A troubleshooting section in the README**, led by the yt-dlp 403. YouTube
+  requires a solved JavaScript challenge to sign the audio URL and a stale
+  binary cannot solve it, but metadata lookup keeps working - so the track
+  resolves, joins the queue, and only dies at playback, which reads as a player
+  bug. Measured 23 August 2026: 2026.07.04 returned a flat 403 on every video
+  tried; 2026.08.19 fetched the same URL and produced valid AAC. Also covers the
+  white-screen tunnel mapping and why a pasted link works when a search does
+  not.
+
 ## 0.9.2 - 2026-08-23
 
 The other half of the 0.9.1 fix: the path a pasted link actually takes.

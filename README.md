@@ -48,7 +48,7 @@ All eighteen, with what each one does and why: **[the gallery](docs/VISUALS.md)*
 
 ## Release status
 
-Version 0.9.2 is a free, open-source **self-hosted release candidate**. The
+Version 0.9.3 is a free, open-source **self-hosted release candidate**. The
 source is published on GitHub for people to inspect, fork, improve, and run in
 their own Discord developer applications.
 
