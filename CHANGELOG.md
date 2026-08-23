@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.1 - 2026-08-08
+
+A single fix, for a fault that should have cost nothing.
+
+### Fixed
+
+- **Any YouTube search failure now falls through to SoundCloud, not only
+  quota.** A dropped TLS handshake to googleapis.com surfaced as
+  `TypeError: fetch failed` and took search down completely, while SoundCloud
+  sat there working. The fallback existed but tested the error message for
+  "quota", and a reset socket does not say quota. YouTube is the optional
+  provider here - without an API key searches go straight to SoundCloud anyway -
+  so no failure of it is worth passing to the user in preference to a working
+  search. Network faults are also converted into a message naming the cause
+  rather than escaping as a raw TypeError.
+
 ## 0.9.0 - 2026-08-07
 
 First public release. Crossfade, a queue that behaves on touch, and a long pass
