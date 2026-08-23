@@ -125,8 +125,29 @@ const ARM_LIFT_TO_AZIMUTH = 1.75 * 1.5;
  * A hand's stroke half-width is 0.052 and the head's radius is 0.204, so they
  * touch at 0.26. This is comfortably past that, because the ask was hands that
  * *sit beside* the head, not only hands that overlap it.
+ *
+ * Raised from 0.45 on 23 August 2026. 0.45 met the brief as it was measured -
+ * a 15% reduction in hands *beside* the head - and the result still looked
+ * wrong, because the eye does not register "beside". It registers the hand
+ * merging into the head circle, and 0.45 removed only a third of those.
+ *
+ * Swept over a six-figure cast for 60 seconds at 60fps, 43,200 hand-frames per
+ * row, counting hands level with the head and within its radius:
+ *
+ * | clearance | beside | merged into the head |
+ * |-----------|--------|----------------------|
+ * | disabled  | 14.11% | 2.225%               |
+ * | 0.45      | 12.44% | 1.481%               |
+ * | 0.60      | 10.63% | 0.845%               |
+ * | 0.75      |  8.36% | 0.345%               |
+ * | 0.90      |  7.22% | 0.231%               |
+ *
+ * 0.75 cuts merging 4.3x against 0.45 while leaving 8.36% of hands passing
+ * beside the head, so the arm still travels there and is pushed off rather
+ * than being forbidden. 0.90 buys 0.11 points more and starts flattening
+ * raised-arm poses, which is the failure mode this must not become.
  */
-const HEAD_CLEARANCE = 0.45;
+const HEAD_CLEARANCE = 0.75;
 
 /**
  * How far to open the elbow per body height of shortfall, in radians.

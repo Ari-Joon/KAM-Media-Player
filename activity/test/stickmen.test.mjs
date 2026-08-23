@@ -693,10 +693,13 @@ for (const shot of SHOTS) {
 // its joint positions in locals, and a clearance that silently stopped being
 // applied would leave every other assertion in this file perfectly green.
 //
-// Measured over 180 seconds of a six-figure cast at 60fps (129,600 hand-frames)
-// the rate is 14.04% with the clearance disabled and 11.93% with it. This runs
-// a shorter track to stay quick; 13% sits between the two and so fails outright
-// if the clearance is removed, without being a tripwire on pose tweaks.
+// Two rates are measured, because the first one alone was not enough. Over a
+// six-figure cast at 60fps, hands *beside* the head run at 14.11% disabled and
+// 8.36% at the current clearance, while hands *merged into* the head run at
+// 2.225% and 0.345%. The beside figure was the original brief and it passed at
+// 12.44% while the result still looked wrong on screen; merging is what a
+// viewer actually notices. Both thresholds sit between disabled and current, so
+// removing the clearance fails outright without making pose tweaks a tripwire.
 {
   const DEG = Math.PI / 180;
   // Proportions and reach limits as `stickmen.js` defines them.
@@ -722,8 +725,11 @@ for (const shot of SHOTS) {
     const hand = [sign * SHOULDER_HALF + Math.sin(azimuth) * radius,
       reach * Math.sin(elevation), Math.cos(azimuth) * radius];
     const head = rotZ(rotX([0, HEAD_RISE, 0], pose.head.swing), pose.head.lift);
-    return Math.abs(hand[1] - head[1]) < HEAD_RADIUS
-      && Math.hypot(hand[0] - head[0], hand[2] - head[2]) < 0.45;
+    const level = Math.abs(hand[1] - head[1]) < HEAD_RADIUS;
+    const dist = Math.hypot(hand[0] - head[0], hand[2] - head[2]);
+    // `beside` is the original brief. `merged` is what a viewer actually sees:
+    // the hand inside the head circle, so the figure loses its face.
+    return { beside: level && dist < 0.45, merged: level && dist < HEAD_RADIUS };
   };
 
   const frames = 1800;
@@ -751,20 +757,24 @@ for (const shot of SHOTS) {
 
   let handFrames = 0;
   let beside = 0;
+  let merged = 0;
   for (let frame = 0; frame < 60 * 60; frame++) {
     fakeNow += 1000 / 60;
     clearanceVisual.render(clearanceScore, frame / 60);
     for (const dancer of clearanceVisual.dancers) {
       for (const side of [0, 1]) {
         handFrames += 1;
-        if (besideHead(dancer.pose, side)) beside += 1;
+        const near = besideHead(dancer.pose, side);
+        if (near.beside) beside += 1;
+        if (near.merged) merged += 1;
       }
     }
   }
 
   const rate = (beside / handFrames) * 100;
+  const mergeRate = (merged / handFrames) * 100;
   assert.ok(handFrames > 40000, `too few hand-frames sampled (${handFrames})`);
-  assert.ok(rate < 13,
+  assert.ok(rate < 11,
     `hands sat beside the head on ${rate.toFixed(2)}% of frames; the clearance `
     + 'is not being applied');
   // The clearance must not become a ban. Hands genuinely pass the head, and a
@@ -772,6 +782,15 @@ for (const shot of SHOTS) {
   assert.ok(rate > 5,
     `hands almost never reach the head (${rate.toFixed(2)}%); the clearance has `
     + 'stopped being a repulsion and started being a clamp');
+
+  // The assertion above passed at 12.44% while the visualisation still looked
+  // wrong, because it counts hands *near* the head rather than hands *in* it.
+  // Merging is what the eye picks up, it was 1.481% at the old clearance and
+  // 0.345% at the current one, so this is the assertion that would have caught
+  // the complaint. Threshold sits between the two.
+  assert.ok(mergeRate < 0.8,
+    `hands merged into the head on ${mergeRate.toFixed(3)}% of frames; the `
+    + 'clearance is too weak to keep the face readable');
 }
 
 performance.now = realNow;
