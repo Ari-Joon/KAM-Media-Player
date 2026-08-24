@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.6 - 2026-08-23
+
+A pass over every place displayed state and audible state could disagree.
+
+### Fixed
+
+- **Editing the queue during a crossfade no longer mislabels the audio.**
+  Nothing cancelled a transition when the queue was mutated, so the handover
+  advanced to whatever was next at that moment rather than to the track whose
+  audio was actually playing. Removing the incoming track mid-fade left the
+  title naming a different song, the audio path pointing at the wrong file, and
+  the analyser handed a track paired with another track's audio. Scores are
+  cached per track, so that mis-pairing persisted on every later play. The join
+  is now abandoned when the queue moves under it, and the next track starts
+  cleanly from its own file.
+
+### Changed
+
+- **A track's visuals are ready when it starts, not a wait after it starts.**
+  The analysis ran when a track became current, which under a crossfade is the
+  moment it is already audible. The audio has been on disk since the prefetch,
+  usually most of a song earlier, so the score is now built then and is a cache
+  hit by the time the track plays.
+
 ## 0.9.5 - 2026-08-23
 
 ### Fixed
