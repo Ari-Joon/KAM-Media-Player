@@ -322,3 +322,60 @@ console.log("crossfade: 39/39 pass");
   player.stopTransitionTimer();
   console.log('prefetch on queue change: 4/4 pass (late additions still join, fetched once)');
 }
+
+// --- The title must not change before the incoming track is being heard ------
+// `startsAtSec` served two purposes and they are not the same instant. It is
+// where the incoming track's zero sits inside the joined resource, which the
+// clock needs, and it was also used as the moment to advance the queue. Under a
+// crossfade that zero is the *start* of the fade, so the title flipped within
+// one 100 ms tick of the fade beginning: a 12 s crossfade named the incoming
+// song for its whole length while the outgoing one was still the louder of the
+// two for the first half.
+//
+// The handover is now the midpoint, because `qsin` is equal-power and puts the
+// two tracks at equal level exactly there.
+{
+  const player = new GuildPlayer('g');
+  player.setCrossfade(8);
+  player.decks.queue.add({ provider: 'p', providerId: 'A', title: 'OUTGOING', durationSec: 200 });
+  player.decks.queue.add({ provider: 'p', providerId: 'B', title: 'INCOMING', durationSec: 180 });
+  player.decks.queue.index = 0;
+  player.prefetched = { key: 'p:B', path: 'b.webm' };
+  player.onTrackStart = () => {};
+
+  // Exactly what startTransition builds for an 8 s fade.
+  player.transition = { startsAtSec: 0, handoverAtSec: 4 };
+
+  // The voice player is swapped for a stub rather than written through: its
+  // state is driven by discord.js internals and assigning to it throws from
+  // inside their event loop.
+  const voice = player.player;
+  const at = (ms) => {
+    player.player = { state: { status: 'playing', resource: { playbackDuration: ms } } };
+  };
+
+  // Barely into the fade.
+  at(100);
+  await player.checkTransition(200);
+  assert.equal(player.queue.current().title, 'OUTGOING',
+    'the title changed the instant the fade began, before the incoming track '
+    + 'was audible');
+
+  // Past the midpoint the incoming track is the one being heard.
+  at(4100);
+  await player.checkTransition(200);
+  player.player = voice;
+  assert.equal(player.queue.current().title, 'INCOMING',
+    'the queue never moved on, so the title would stay wrong for the rest of '
+    + 'the track');
+
+  // The clock must still be right. The incoming track's zero is the start of
+  // the fade, so at the midpoint it is genuinely 4 s in - `startsAtSec` stays 0
+  // and the offset must not absorb the handover point.
+  assert.equal(player.seekOffsetSec, 0,
+    'the handover point leaked into the clock offset');
+
+  player.cancelTransition();
+  player.stopTransitionTimer();
+  console.log('handover timing: 3/3 pass (title follows what is audible, clock intact)');
+}

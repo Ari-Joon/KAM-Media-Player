@@ -43,11 +43,14 @@ const players = new Map();
 /**
  * How many recently played tracks to remember per player.
  *
- * Seven, because the panel that shows them is a convenience under the search
- * box rather than a history: enough to cover a session's worth of "what was
- * that one", short enough that it never becomes a list to scroll.
+ * Fifteen. This was seven, on the reasoning that the panel under the search box
+ * is a convenience rather than a history and should never become a list to
+ * scroll. In use the opposite complaint came first: a session runs longer than
+ * seven tracks and "what was that one" reaches further back than the panel did.
+ * The client renders whatever the snapshot carries and imposes no cap of its
+ * own, so this constant is the only thing that decides the length.
  */
-const RECENT_TRACKS = 7;
+const RECENT_TRACKS = 15;
 
 /**
  * Longest crossfade the slider offers, in seconds.
@@ -233,7 +236,7 @@ export class GuildPlayer {
      * starts, so the queue advances - and the clock switches over - at the right
      * moment rather than on a wall-clock guess. Cleared the instant the handover
      * happens, because a stale one here stops the *next* transition ever arming.
-     * @type {{startsAtSec: number}|null}
+     * @type {{startsAtSec: number, handoverAtSec: number}|null}
      */
     this.transition = null;
     /**
@@ -520,7 +523,11 @@ export class GuildPlayer {
       // the incoming track begins at a known offset within it. Reaching that
       // offset is the moment the queue moves on.
       const elapsed = (this.player.state.resource?.playbackDuration ?? 0) / 1000;
-      if (elapsed >= this.transition.startsAtSec) this.completeTransition();
+      // `handoverAtSec`, not `startsAtSec`: see where the transition is built.
+      // Falls back for a transition set without one, which is how the older
+      // tests construct it.
+      const handover = this.transition.handoverAtSec ?? this.transition.startsAtSec;
+      if (elapsed >= handover) this.completeTransition();
       return;
     }
 
@@ -612,7 +619,27 @@ export class GuildPlayer {
     const resource = createAudioResource(ffmpeg.stdout, { inputType: StreamType.Raw });
     // The incoming track's zero: immediate under a crossfade, after the
     // outgoing tail under a gapless join.
-    this.transition = { startsAtSec: effective > 0 ? 0 : tail };
+    // Two different moments, and conflating them is what made the title wrong.
+    //
+    // `startsAtSec` is where the incoming track's zero sits inside the joined
+    // resource, and the clock needs it: `acrossfade` puts that zero at the
+    // start of the fade, `concat` puts it after the outgoing tail.
+    //
+    // `handoverAtSec` is when the incoming track becomes the one being heard,
+    // which is what the title and the queue should follow. Under a crossfade
+    // those are not the same instant. Handing over at `startsAtSec` flipped the
+    // title the moment the fade began, so a 12 s crossfade spent its whole
+    // length naming a song that was still fading in, while the outgoing track
+    // was the louder of the two for the first half of it.
+    //
+    // Half the fade, because the curve is equal-power: `qsin` has the two
+    // tracks at equal level exactly at the midpoint, so that is the moment the
+    // incoming track takes over. A gapless join has no overlap at all, so its
+    // handover stays where the audio actually changes.
+    this.transition = {
+      startsAtSec: effective > 0 ? 0 : tail,
+      handoverAtSec: effective > 0 ? effective / 2 : tail,
+    };
 
     this.currentResource = resource;
     this.player.play(resource);
