@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.5 - 2026-08-23
+
+### Fixed
+
+- **The now playing title no longer changes before you can hear the new song.**
+  One field was serving as both the incoming track's zero inside the joined
+  resource, which the clock needs, and the moment to advance the queue. Under a
+  crossfade those are different instants: `acrossfade` puts that zero at the
+  start of the fade, so the title flipped within one 100 ms tick of the fade
+  beginning. A 12 second crossfade spent its whole length naming a song that
+  was still fading in, while the outgoing track was the louder of the two for
+  the first half. The handover is now the midpoint of the fade, where an
+  equal-power curve has the two tracks at equal level. The clock is unchanged.
+
+### Changed
+
+- **Recently played holds fifteen tracks instead of seven.** The panel was
+  sized as a convenience rather than a history, and a session runs longer than
+  seven tracks.
+
 ## 0.9.4 - 2026-08-23
 
 Crossfade actually crossfades, and the stick men stop putting a hand through
