@@ -379,3 +379,101 @@ console.log("crossfade: 39/39 pass");
   player.stopTransitionTimer();
   console.log('handover timing: 3/3 pass (title follows what is audible, clock intact)');
 }
+
+// --- The score is built before the track is heard, not after ------------------
+// `attachScore` ran only when a track became current. Under a crossfade that is
+// the handover, so the incoming track was already audible while its analysis
+// started - the wait sat in front of the listener as "analysing" over a song
+// that was playing. The audio has been on disk since the prefetch, typically
+// most of a song earlier.
+{
+  const player = new GuildPlayer('g');
+  player.setCrossfade(6);
+
+  const warmed = [];
+  player.onPrefetch = (track, audioPath) => warmed.push([track.providerId, audioPath]);
+  player.loadAudio = async (track) => `/cache/${track.providerId}.m4a`;
+
+  player.decks.queue.add({ provider: 'p', providerId: 'A', title: 'A', durationSec: 200 });
+  player.decks.queue.add({ provider: 'p', providerId: 'B', title: 'B', durationSec: 200 });
+  player.decks.queue.index = 0;
+
+  player.prefetchUpcoming();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(warmed, [['B', '/cache/B.m4a']],
+    'the prefetch did not offer the next track for analysis, so its score can '
+    + 'only start once it is already playing');
+
+  // Fires once, not on every tick of the watcher.
+  for (let i = 0; i < 10; i++) {
+    player.prefetchUpcoming();
+    await Promise.resolve();
+  }
+  assert.equal(warmed.length, 1, `analysis was offered ${warmed.length} times`);
+
+  player.stopTransitionTimer();
+  console.log('early analysis: 2/2 pass (score warmed during the previous track)');
+}
+
+// --- A queue edit during a join must not mislabel the audio -------------------
+// Nothing cancelled a transition when the queue was mutated, and the handover
+// advanced to whatever was next at that moment rather than to the track whose
+// audio was actually in the joined resource.
+//
+// Measured before the guard: crossfading into B and removing B mid-fade left
+// the title reading C, `audioPath` pointing at B's file, and `onTrackStart`
+// called as ("C", "/cache/B.m4a"). That last part is the serious half - scores
+// are cached per track, so C's cached score becomes an analysis of B's audio
+// and stays wrong on every later play until the analyser version changes.
+{
+  const player = new GuildPlayer('g');
+  player.setCrossfade(8);
+  for (const id of ['A', 'B', 'C']) {
+    player.decks.queue.add({ provider: 'p', providerId: id, title: id, durationSec: 200 });
+  }
+  player.decks.queue.index = 0;
+
+  const analysed = [];
+  player.onTrackStart = (track, audioPath) => analysed.push([track.title, audioPath]);
+
+  // A crossfade into B is playing: B's audio is in the resource already.
+  player.transition = { startsAtSec: 0, handoverAtSec: 4, trackKey: 'p:B' };
+  player.prefetched = { key: 'p:B', path: '/cache/B.m4a' };
+  let killed = 0;
+  player.decoder = { kill: () => { killed += 1; } };
+
+  // Someone removes B while it is fading in.
+  player.decks.queue.remove(1);
+  player.completeTransition();
+
+  assert.notEqual(player.queue.current().title, 'C',
+    'the handover advanced to a track whose audio is not the one playing');
+  assert.deepEqual(analysed, [],
+    'the analyser was handed a track paired with another track\'s audio, which '
+    + 'poisons that track\'s cached score');
+  assert.equal(killed, 1,
+    'the joined resource was left playing under a label that does not match it');
+  assert.equal(player.transition, null, 'the transition was left standing');
+
+  // The undisturbed case must still hand over normally.
+  const ok = new GuildPlayer('h');
+  ok.setCrossfade(8);
+  for (const id of ['A', 'B']) {
+    ok.decks.queue.add({ provider: 'p', providerId: id, title: id, durationSec: 200 });
+  }
+  ok.decks.queue.index = 0;
+  ok.onTrackStart = () => {};
+  ok.transition = { startsAtSec: 0, handoverAtSec: 4, trackKey: 'p:B' };
+  ok.prefetched = { key: 'p:B', path: '/cache/B.m4a' };
+  ok.completeTransition();
+  assert.equal(ok.queue.current().title, 'B',
+    'an untouched queue no longer hands over');
+
+  player.cancelTransition();
+  player.stopTransitionTimer();
+  ok.cancelTransition();
+  ok.stopTransitionTimer();
+  console.log('queue edits during a join: 5/5 pass (no mislabelled audio, no poisoned score)');
+}

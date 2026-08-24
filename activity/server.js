@@ -97,10 +97,52 @@ function readAnalyserVersion() {
  * @param {object} track
  * @param {string} audioPath
  */
-async function attachScore(player, track, audioPath) {
-  const cachePath = path.join(
+function scoreCachePath(track) {
+  return path.join(
     CACHE_DIR, `${track.provider}-${track.providerId}-a${analyserVersion}.json`,
   );
+}
+
+/**
+ * Analyse a prefetched track while the previous one is still playing.
+ *
+ * The score used to be built at the moment a track became current. Under a
+ * crossfade that is the handover, so the incoming track was already audible
+ * with nothing on screen but "analysing" - the wait was in front of the
+ * listener rather than behind them. The audio has been on disk since the
+ * prefetch, which is typically most of a song earlier, so there is no reason
+ * to wait.
+ *
+ * Deliberately touches no player state. `attachScore` sets `analysing` and
+ * assigns `player.score`, and doing either here would put a spinner over a
+ * track that is playing perfectly well. This only writes the cache, which
+ * `attachScore` then hits instantly at the handover.
+ *
+ * @param {object} track
+ * @param {string} audioPath
+ */
+async function warmScore(track, audioPath) {
+  const cachePath = scoreCachePath(track);
+  try {
+    await readFile(cachePath, 'utf8');
+    return;
+  } catch {
+    // Not analysed before, which is the case worth doing the work for.
+  }
+
+  try {
+    const score = await analyser.analyse(audioPath, track);
+    await writeFile(cachePath, JSON.stringify(score));
+    log.debug(`score ready ahead of "${track.title}"`);
+  } catch (error) {
+    // Speculative work. A failure here must surface when the track is actually
+    // played, through `attachScore`, rather than as noise during another song.
+    log.debug(`early analysis failed for "${track.title}": ${error.message}`);
+  }
+}
+
+async function attachScore(player, track, audioPath) {
+  const cachePath = scoreCachePath(track);
 
   try {
     const cached = JSON.parse(await readFile(cachePath, 'utf8'));
@@ -417,6 +459,12 @@ function preparePlayer(player, channel = null) {
     attachScore(player, track, audioPath);
     // Not awaited: the cast size is a refinement, not a prerequisite.
     attachPerformerCount(player, track);
+  };
+
+  // The next track's audio is on disk long before it is heard, so its score is
+  // built now and is a cache hit by the time it starts.
+  player.onPrefetch = (track, audioPath) => {
+    warmScore(track, audioPath);
   };
 
   // Remember where to post, so the end of a queue is announced in the channel

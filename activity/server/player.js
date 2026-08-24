@@ -268,6 +268,18 @@ export class GuildPlayer {
     this.onTrackStart = null;
 
     /**
+     * Called when a prefetched track's audio lands on disk.
+     *
+     * Separate from {@link onTrackStart} because it fires while the *previous*
+     * track is still playing, so anything it triggers must not touch the
+     * player's visible state. It exists so the analyser can have a score ready
+     * before the track is audible rather than starting once it already is.
+     *
+     * @type {((track: object, audioPath: string) => void)|null}
+     */
+    this.onPrefetch = null;
+
+    /**
      * Called when nothing is left to play, so the channel can be told rather
      * than the music simply stopping with no explanation.
      * @type {null | (() => void)}
@@ -639,6 +651,10 @@ export class GuildPlayer {
     this.transition = {
       startsAtSec: effective > 0 ? 0 : tail,
       handoverAtSec: effective > 0 ? effective / 2 : tail,
+      // Which track's audio is actually inside the joined resource. The queue
+      // can be edited while the join plays, and without this the handover
+      // advances to whatever is next *now* and attributes this audio to it.
+      trackKey: key,
     };
 
     this.currentResource = resource;
@@ -667,6 +683,38 @@ export class GuildPlayer {
    */
   completeTransition() {
     const startsAtSec = this.transition?.startsAtSec ?? 0;
+    const joined = this.transition?.trackKey ?? null;
+
+    // The queue can be edited while a join is playing. If the track that is
+    // about to become current is no longer the one whose audio is in the
+    // resource, handing over would attribute this audio to a different song:
+    // the title would name it, and `onTrackStart` would hand the analyser that
+    // track paired with this file. The score is cached by track, so that
+    // mis-pairing does not pass when the song ends - it persists, and every
+    // later play of that track gets another song's beats and sections.
+    //
+    // Measured before this guard: crossfading into B and removing B mid-fade
+    // left the title reading C, `audioPath` pointing at B's file, and the
+    // analyser called as ("C", "/cache/B.m4a").
+    //
+    // Killing the decoder ends the resource, which puts the player Idle and
+    // sends it through `advance` - the ordinary path, which starts whatever is
+    // genuinely next from its own file. That costs a gap, which is the right
+    // trade for audio that is labelled correctly.
+    if (joined) {
+      const upcoming = this.queue.upcoming()[0];
+      const actual = upcoming ? `${upcoming.provider}:${upcoming.providerId}` : null;
+      if (actual !== joined) {
+        console.log(`[voice ${this.guildId}] the queue changed under a join `
+          + `(expected ${joined}, found ${actual ?? 'nothing'}); starting the `
+          + 'next track cleanly instead of mislabelling this audio');
+        this.transition = null;
+        this.stopTransitionTimer();
+        this.prefetched = null;
+        this.killDecoder();
+        return;
+      }
+    }
     // Cleared before anything below can return early, and before the timer is
     // re-armed. A handover left standing here is not untidiness: to
     // `checkTransition` a non-null transition means "still waiting to hand
@@ -744,7 +792,12 @@ export class GuildPlayer {
       // knows one is already on disk - the alternative is a download inside the
       // transition, which would stall past the end of the outgoing track.
       .then((path) => {
-        if (path && this.prefetching === key) this.prefetched = { key, path };
+        if (!path || this.prefetching !== key) return;
+        this.prefetched = { key, path };
+        // The file is on disk well before the track is heard, so the analysis
+        // can happen now instead of at the handover - where it left the
+        // incoming track playing with no visuals while it ran.
+        this.onPrefetch?.(next, path);
       })
       .catch(() => {})
       .finally(() => {
