@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.7 - 2026-09-22
+
+The server says when a newer version is out.
+
+### Added
+
+- **An update notice at boot.** The server asks GitHub once, when it starts,
+  whether a newer version has been tagged, and says so in the console and in
+  the `update` field of `/healthz` - never in Discord. It reads the tags rather
+  than the latest release, which lags them, and only a higher version counts.
+  It never delays the boot, sends nothing but its own version number, and
+  `UPDATE_CHECK=off` switches it off.
+
+### Changed
+
+- **DEPLOY.md's update steps** now pull the new code and restart, and no longer
+  point at an old path.
+
 ## 0.9.6 - 2026-08-23
 
 A pass over every place displayed state and audible state could disagree.
