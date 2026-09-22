@@ -42,6 +42,7 @@ import { ArtistInfo } from './server/artistinfo.js';
 import { fetchProxiedImage, ImageProxyError } from './server/imageproxy.js';
 import { scoreCache, imageCache } from './server/cache.js';
 import { loadConfig } from './server/config.js';
+import { checkForUpdate, checkDisabled, CHANGELOG } from './server/updates.js';
 import { creditedArtists } from './client/artists.js';
 
 const {
@@ -71,6 +72,13 @@ const analyser = new AnalyserWorker({
  * @type {string}
  */
 let analyserVersion = 'unknown';
+
+/**
+ * What the boot-time update check found, for /healthz. `checked: false` until
+ * GitHub has answered, or for good when UPDATE_CHECK=off.
+ * @type {{ checked: boolean, disabled?: boolean, current?: string, latest?: string, available?: boolean, error?: string }}
+ */
+let updateStatus = { checked: false };
 
 /** Ask the analyser for its version. Called during warm-up. */
 function readAnalyserVersion() {
@@ -229,6 +237,7 @@ await playlists.load();
 const log = logger('server');
 const licence = logger('licensing');
 const voice = logger('voice');
+const updates = logger('update');
 
 /** Group-size lookups, cached to disk and rate limited. */
 const artistInfo = new ArtistInfo(CACHE_DIR);
@@ -962,6 +971,8 @@ app.get('/healthz', (request, response) => {
     // answer to "may we run this publicly" is a request rather than an audit of
     // whichever environment variables happen to be set on the host.
     licensing: licensingPosture(),
+    // Whether GitHub has a newer version than this one, as found at boot.
+    update: updateStatus,
   });
 });
 
@@ -1957,6 +1968,25 @@ app.listen(PORT, () => {
   const posture = licensingPosture();
   licence.info(`soundcloud=${posture.soundcloud} youtube=${posture.youtube}`);
   licence.info(posture.note);
+
+  // Asked once, here, and without holding anything up: is there a newer
+  // version than this one? The answer is for whoever runs this, so it is
+  // printed and kept on /healthz, never sent into Discord.
+  if (checkDisabled()) {
+    updateStatus = { checked: false, disabled: true };
+    return;
+  }
+  checkForUpdate().then((result) => {
+    updateStatus = { checked: true, ...result };
+    if (result.available) {
+      updates.info(`KAM Media Player ${result.latest} is available - this is ${result.current}. What changed: ${CHANGELOG}`);
+      updates.info('To update: git pull, then in activity/ npm ci && npm run build, and restart - or rebuild the image (docker compose up -d --build, or fly deploy).');
+    } else if (result.error) {
+      updates.debug(`could not check for a newer version: ${result.error}`);
+    } else {
+      updates.info(`up to date (${result.current})`);
+    }
+  });
 });
 
 // Register the slash command against every guild the bot joins. Guild-scoped

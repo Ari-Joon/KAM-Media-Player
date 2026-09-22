@@ -25,6 +25,10 @@ anything that changes what a room hears. The identity comes from the verified
 token and never from the request body, so a crafted request cannot queue,
 favourite, rename, or control playback as somebody else.
 
+The server makes one request of its own at boot: it asks GitHub's API for the
+repository's tags, to say whether a newer version exists. It sends its version
+number and nothing else, and `UPDATE_CHECK=off` switches it off.
+
 Also in place: a 32 KiB JSON body ceiling, per-route rate limits, an image proxy
 that refuses redirects to private addresses, non-image content and oversized
 responses, and stores that keep only server-resolved track descriptors, so

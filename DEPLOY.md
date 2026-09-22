@@ -233,14 +233,23 @@ Caddy obtains and renews HTTPS certificates when the domain points at the VPS.
 
 ## Updating or stopping
 
-Test updates before deploying them:
+The server checks GitHub once when it starts. When a newer version has been
+tagged it says so in the console, under `update`, and in the `update` field
+of `/healthz`. `UPDATE_CHECK=off` stops it asking.
+
+To update, fetch the new code and test it before deploying it. From the
+repository folder:
 
 ```powershell
-cd "C:\Projects\Discord Media Player\activity"
+git pull
+cd activity
 npm ci
 npm test
 npm run build
 ```
+
+Then restart it the way you run it: stop and `npm start` again, or
+`docker compose up -d --build`, or `fly deploy`.
 
 If you abandon a hosted deployment, delete the application resources, volumes,
 DNS mappings, and secrets through the hosting provider so they do not continue
