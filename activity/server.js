@@ -1180,11 +1180,44 @@ app.get('/api/image', rateLimit(300, 60_000), async (request, response) => {
     response.set('Cache-Control', 'public, max-age=86400');
     response.send(image.body);
   } catch (error) {
-    if (error instanceof ImageProxyError) return response.status(error.status).end();
+    if (error instanceof ImageProxyError) {
+      reportImageRefusal(source, error);
+      return response.status(error.status).end();
+    }
     console.error('image proxy failed:', error.message);
     response.status(502).end();
   }
 });
+
+/** When each refused image was last reported, so a panel reopened does not repeat it. */
+const reportedImageRefusals = new Map();
+
+/**
+ * Say which host refused an image, and how.
+ *
+ * Refusals were answered to the client and never logged, so a broken avatar
+ * left nothing to go on: an avatar replaced since it was stored (404), one too
+ * large for the cap (413) and a host off the allowlist (403) all looked the
+ * same, which is to say like nothing. Host and status only - the path is a
+ * user id and hash, and says nothing the status does not.
+ *
+ * @param {string} source
+ * @param {ImageProxyError} error
+ */
+function reportImageRefusal(source, error) {
+  const now = Date.now();
+  const last = reportedImageRefusals.get(source);
+  if (last && now - last < 10 * 60 * 1000) return;
+  if (reportedImageRefusals.size > 500) reportedImageRefusals.clear();
+  reportedImageRefusals.set(source, now);
+  let host = 'an invalid URL';
+  try {
+    host = new URL(source).hostname;
+  } catch {
+    // Reported as invalid, which is what the 400 already says.
+  }
+  log.info(`image refused: ${host} answered ${error.status} (${error.message})`);
+}
 
 /**
  * Play a favourite, joining the voice channel if the bot is not already in it.
@@ -1264,6 +1297,17 @@ const avatarCache = new Map();
 const AVATAR_TTL_MS = 30 * 60 * 1000;
 
 /**
+ * How long a *failed* lookup is remembered.
+ *
+ * Much shorter than a success, for the same reason `auth.js` keeps refusals
+ * short. A failure was held for the full half hour, and while it was, every
+ * row fell back to the avatar hash stored when that song was saved - so one
+ * dropped request to Discord, which this machine has shown it can produce,
+ * put a picture someone had since replaced on their rows for thirty minutes.
+ */
+const AVATAR_FAILURE_TTL_MS = 60 * 1000;
+
+/**
  * Largest number of avatars held at once.
  *
  * The TTL was checked on read but entries were never removed, so the map grew
@@ -1324,11 +1368,15 @@ async function resolveAvatar(userId) {
   if (!userId) return null;
 
   const cached = avatarCache.get(userId);
-  if (cached && Date.now() - cached.at < AVATAR_TTL_MS) return cached.url;
+  const ttl = cached?.url ? AVATAR_TTL_MS : AVATAR_FAILURE_TTL_MS;
+  if (cached && Date.now() - cached.at < ttl) return cached.url;
 
   try {
     const user = await bot.users.fetch(userId);
-    const url = user.displayAvatarURL({ extension: 'png', size: 64 });
+    // `forceStatic`, because `extension` alone is ignored for an animated
+    // avatar - discord.js turns an `a_` hash into a GIF whatever was asked
+    // for. See `avatarUrl` for why these are always stills.
+    const url = user.displayAvatarURL({ extension: 'png', size: 64, forceStatic: true });
     avatarCache.set(userId, { url, at: Date.now() });
     pruneAvatarCache();
     return url;
@@ -1349,6 +1397,13 @@ app.get('/api/favourites/:guildId', async (request, response) => {
   await favourites.load();
   const { guildId } = request.params;
 
+  // Each person's newest known avatar, for rows whose live lookup fails. A
+  // row's own record holds the hash from when that song was saved, which for
+  // anyone who has changed their picture since is an image that no longer
+  // exists.
+  const people = favourites.contributors(guildId);
+  const newest = new Map(people.filter((person) => person.id).map((person) => [person.id, person]));
+
   const entries = await Promise.all(
     favourites.list(guildId).map(async (entry) => ({
       ...entry,
@@ -1364,14 +1419,14 @@ app.get('/api/favourites/:guildId', async (request, response) => {
         // every one of those rows fell through to an initial badge while the
         // *same person* showed a real picture in the folder list beside it.
         avatarUrl: (await resolveAvatar(who.id))
-          ?? avatarUrl(who)
+          ?? avatarUrl(newest.get(who.id) ?? who)
           ?? await avatarByName(guildId, who.username),
       }))),
     })),
   );
 
   const contributors = await Promise.all(
-    favourites.contributors(guildId).map(async (person) => ({
+    people.map(async (person) => ({
       ...person,
       avatarUrl: (await resolveAvatar(person.id)) ?? avatarUrl(person),
     })),

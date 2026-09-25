@@ -190,10 +190,19 @@ export class Favourites {
       for (const who of entry.addedBy ?? []) {
         const key = who.id ?? who.username;
         const current = people.get(key) ?? {
-          id: who.id ?? null, username: who.username, count: 0, latest: 0,
+          id: who.id ?? null, username: who.username, avatar: null, count: 0, latest: 0,
         };
         current.count += 1;
-        current.latest = Math.max(current.latest, Date.parse(who.at ?? '') || 0);
+        // The newest record's avatar, so a fallback shows the picture someone
+        // has now rather than whichever one they had when they saved that song.
+        // This carried no avatar at all before, and `avatarUrl` without one
+        // derives Discord's default - so a failed live lookup put the generic
+        // logo on every folder.
+        const at = Date.parse(who.at ?? '') || 0;
+        if (at >= current.latest) {
+          current.latest = at;
+          current.avatar = who.avatar ?? null;
+        }
         people.set(key, current);
       }
     }
@@ -282,6 +291,11 @@ export function avatarUrl(user) {
     const index = (BigInt(user.id) >> 22n) % 6n;
     return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
   }
-  const extension = user.avatar.startsWith('a_') ? 'gif' : 'png';
-  return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${extension}?size=64`;
+  // Always a still PNG, animated avatars included: the CDN serves the first
+  // frame for an `a_` hash. The badges are 20-odd pixels across, Discord's own
+  // lists show avatars still until hovered, and a GIF is the one form that can
+  // outgrow the image proxy's 5 MB cap. Of the four people with favourites in
+  // the cache, one has an animated avatar, and it is the account whose picture
+  // was reported as not loading.
+  return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`;
 }

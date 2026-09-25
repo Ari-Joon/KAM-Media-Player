@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { rm, writeFile, mkdir } from 'node:fs/promises';
+import { rm, writeFile, mkdir, mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { Favourites, avatarUrl } from '../server/favourites.js';
 
 const dir = '/tmp/kam-fav-test';
@@ -75,7 +77,35 @@ console.log('migration: 3/3 pass');
 assert.ok(avatarUrl(arian).includes('a1'));
 assert.ok(avatarUrl({ id: '1532123802216169734', avatar: null }).includes('embed/avatars/'));
 assert.equal(avatarUrl(null), null);
-console.log('avatars: 3/3 pass');
+
+// An animated avatar is requested as a still. discord.js and this function both
+// used to turn an `a_` hash into a GIF, the one form that can outgrow the image
+// proxy's cap, and the account whose picture would not load was the only one
+// in the cache with an animated avatar.
+const animated = avatarUrl({ id: '111', avatar: 'a_abc123' });
+assert.ok(animated.endsWith('/a_abc123.png?size=64'), `an animated avatar became ${animated}`);
+
+// A fallback shows the picture someone has *now*. Contributors carried no
+// avatar at all, so a failed live lookup put Discord's default logo on every
+// folder; and rows used the hash from when each song was saved, which for
+// anyone who has since changed their picture no longer exists.
+{
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'kam-avatar-'));
+  const changed = new Favourites(dir);
+  await changed.load();
+  const track = (id) => ({ provider: 'youtube', providerId: id, title: id, artist: 'A', durationSec: 60 });
+  changed.add('g', track('first'), { id: '7', username: 'ari', avatar: 'old_static' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  changed.add('g', track('second'), { id: '7', username: 'ari', avatar: 'a_new_animated' });
+  const [person] = changed.contributors('g');
+  assert.equal(person.avatar, 'a_new_animated', `a contributor's fallback avatar was ${person.avatar}`);
+  assert.ok(avatarUrl(person).includes('a_new_animated.png'),
+    'the fallback does not point at the newest picture');
+  // Saved before the directory goes, or the pending write races the removal.
+  await changed.persist();
+  await rm(dir, { recursive: true, force: true });
+}
+console.log('avatars: 6/6 pass (animated as a still, newest picture for fallbacks)');
 
 await store.persist();
 await migrated.persist();
