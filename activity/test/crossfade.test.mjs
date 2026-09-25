@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
+import { PassThrough } from 'node:stream';
+import { createAudioResource, StreamType, AudioPlayerStatus } from '@discordjs/voice';
 import {
-  GuildPlayer, transitionArgs, MAX_CROSSFADE_SEC, GAPLESS_LEAD_SEC,
+  GuildPlayer, transitionArgs, playbackArgs, mixOutPoint,
+  MAX_CROSSFADE_SEC, GAPLESS_LEAD_SEC, MAX_OUTRO_CUT_SEC,
 } from '../server/player.js';
+import { LIMITER } from '../server/loudness.js';
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Let every promise chain queued so far run to completion. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 // --- The gapless lead --------------------------------------------------------
 // The trigger compares transmitted position against `track.durationSec`, which
@@ -65,12 +73,16 @@ assert.ok(GAPLESS_LEAD_SEC >= 1,
     + 'end of the file instead of at the join');
   assert.equal(Number(faded[trim + 1]), 6);
 
-  // Raw s16le at 48k stereo, which is what StreamType.Raw promises the player.
-  // Anything else is silence or noise, not an error.
+  // Ogg Opus from ffmpeg's libopus, which is what StreamType.OggOpus promises
+  // the player. It used to be 16-bit PCM, and that conversion is where a hot
+  // master's overs were hard-clipped. 20 ms frames because `playbackDuration`
+  // adds 20 ms per packet: any other size and the visuals drift off the audio.
   assert.deepEqual(
-    faded.slice(faded.indexOf('-f')),
-    ['-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
+    faded.slice(faded.indexOf('-acodec')),
+    ['-acodec', 'libopus', '-b:a', '96k', '-frame_duration', '20',
+      '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1'],
   );
+  assert.ok(!faded.includes('s16le'), 'a transition still goes through 16-bit PCM');
 
   // Zero is a gapless join, which is a different filter and not a zero-length
   // fade: `acrossfade` rejects d=0.
@@ -80,8 +92,60 @@ assert.ok(GAPLESS_LEAD_SEC >= 1,
   const gaplessFilter = gapless[gapless.indexOf('-filter_complex') + 1];
   assert.match(gaplessFilter, /concat=n=2:v=0:a=1/, 'a gapless join used a fade');
   assert.doesNotMatch(gaplessFilter, /acrossfade/);
+  // Without a score to say where the audio ends, a gapless join keeps the rest
+  // of the file, exactly as before.
+  assert.ok(!gapless.includes('-t'), 'a gapless join without a score was trimmed');
 
-  console.log('transition ffmpeg args: 10/10 pass (input order, fade trim, raw output)');
+  console.log('transition ffmpeg args: 12/12 pass (input order, fade trim, Opus output)');
+}
+
+// --- Nothing reaches the encoder without the limiter ---------------------------
+// 22 of the 29 cached tracks decoded above full scale, and the seek and gapless
+// paths hard-clipped them at a 16-bit stage. Every path must end in the same
+// limiter, and each track must carry its own loudness gain.
+{
+  const faded = transitionArgs({
+    fromPath: 'a.webm', toPath: 'b.webm', position: 100, fade: 6,
+    fromGain: -5.25, toGain: 1.5, toOffset: 2.454,
+  });
+  const graph = faded[faded.indexOf('-filter_complex') + 1];
+  // Matched per input, before the join: one gain after the mix would leave an
+  // 11 dB lurch between a loud track and a quiet one.
+  assert.match(graph, /^\[0:a\]volume=-5\.25dB\[a0\];\[1:a\]volume=1\.50dB\[a1\];/,
+    'each track is not brought to the target before they meet');
+  assert.ok(graph.endsWith(`,${LIMITER}[out]`), 'the join does not end in the limiter');
+
+  // The incoming track's opening silence is skipped with its own input seek,
+  // which must sit between the two inputs to apply to the second.
+  const second = faded.lastIndexOf('-i');
+  const skip = faded.lastIndexOf('-ss');
+  assert.ok(skip > faded.indexOf('-i') && skip < second,
+    'the lead-in seek does not apply to the incoming track');
+  assert.equal(faded[skip + 1], '2.454');
+
+  // A gapless join told where the audio ends is trimmed there, so the trailing
+  // silence is not part of it and `concat` starts the next track on time.
+  const gapless = transitionArgs({
+    fromPath: 'a.webm', toPath: 'b.webm', position: 190, fade: 0, fromLength: 4.25,
+  });
+  const trim = gapless.indexOf('-t');
+  assert.ok(trim > 0 && trim < gapless.indexOf('-i'), 'a gapless join with a known end was not trimmed');
+  assert.equal(gapless[trim + 1], '4.250');
+  assert.ok(gapless[gapless.indexOf('-filter_complex') + 1].endsWith(`,${LIMITER}[out]`),
+    'a gapless join bypasses the limiter');
+
+  // Normal starts and seeks: the same gain and limiter, and the same encoder.
+  const start = playbackArgs({ file: 'a.webm', gain: -4.6 });
+  assert.equal(start[start.indexOf('-af') + 1], `volume=-4.60dB,${LIMITER}`,
+    'a normal start does not go through the loudness gain and limiter');
+  assert.ok(!start.includes('-ss'), 'a start from zero seeks');
+  const seek = playbackArgs({ file: 'a.webm', position: 42.5, gain: -4.6 });
+  assert.ok(seek.indexOf('-ss') < seek.indexOf('-i'), 'the seek is not an input option');
+  assert.equal(seek[seek.indexOf('-ss') + 1], '42.5');
+  assert.deepEqual(seek.slice(seek.indexOf('-acodec')), start.slice(start.indexOf('-acodec')),
+    'a seek encodes differently from a normal start');
+
+  console.log('limiter on every path: 11/11 pass (per-track gain, lead-in, gapless trim)');
 }
 
 // --- The setting -------------------------------------------------------------
@@ -227,28 +291,31 @@ assert.ok(GAPLESS_LEAD_SEC >= 1,
     player.decoder = { kill: () => { killed += 1; } };
   };
 
+  // Cancelling drops the bookkeeping and nothing else. It used to kill the
+  // decoder as well, and after a seek or a completed join that decoder is the
+  // one carrying the song: switching transitions off skipped the track.
   arm();
   player.cancelTransition();
   assert.equal(player.transition, null, 'the transition survived cancellation');
   assert.equal(player.transitionTimer, null, 'the watcher survived cancellation');
-  assert.equal(killed, 1, 'the decoder was left running for a track nobody will hear');
+  assert.equal(killed, 0, 'cancelling a transition killed the audio that was playing');
 
-  // A skip cancels. Without this the joined stream keeps mixing in the track
-  // that *was* next, over the top of the one the user skipped to.
+  // A skip retires the audio. Without this the joined stream keeps mixing in
+  // the track that *was* next, over the top of the one the user skipped to.
   arm();
   await player.advance(true).catch(() => {});
   assert.equal(player.transition, null, 'a skip left a transition armed');
-  assert.equal(killed, 2);
+  assert.equal(killed, 1, 'a skip left the old decoder running');
 
-  // Stopping cancels, and drops the prefetched file with it.
+  // Stopping retires it too, and drops the prefetched file with it.
   arm();
   player.prefetched = { key: 'p:2', path: 'b.webm' };
   player.stop();
   assert.equal(player.transition, null, 'stopping left a transition armed');
   assert.equal(player.prefetched, null, 'stopping kept a prefetched file');
-  assert.equal(killed, 3);
+  assert.equal(killed, 2, 'stopping left the old decoder running');
 
-  console.log('transition cancellation: 8/8 pass (cancel, skip, stop)');
+  console.log('transition cancellation: 8/8 pass (cancel keeps the song, skip and stop retire it)');
 }
 
 console.log("crossfade: 39/39 pass");
@@ -476,4 +543,110 @@ console.log("crossfade: 39/39 pass");
   ok.cancelTransition();
   ok.stopTransitionTimer();
   console.log('queue edits during a join: 5/5 pass (no mislabelled audio, no poisoned score)');
+}
+
+// --- Where the fade goes -------------------------------------------------------
+// Measured over 462 joins between the cached tracks: a fade ending at the end
+// of the file - what actually shipped - had both songs audible for 6% of a 6 s
+// fade and none of a 2 s one. Ending where the outro starts falling, with the
+// incoming silence skipped, made it 46% and 34%.
+{
+  const fps = 30;
+  /** A 200 s score: steady at 0.6, then an outro, then silence. */
+  const score = (shape) => ({
+    analysis: { is_partial: false },
+    lanes: {
+      fps,
+      energy: Array.from({ length: 200 * fps }, (_, i) => shape(i / fps)),
+    },
+  });
+
+  // Steady until 180 s, falling linearly to silence at 190 s, silent to 200 s.
+  const fading = score((t) => (t < 180 ? 0.6 : t < 190 ? 0.6 * (190 - t) / 10 : 0));
+
+  // A crossfade lets go where the outro drops below half the typical level,
+  // 185 s here, so the fade is spent on music rather than on the fade-out.
+  const crossfade = mixOutPoint(fading, 200, true);
+  assert.ok(crossfade.fromScore);
+  assert.ok(Math.abs(crossfade.at - 185) < 0.6, `the crossfade let go at ${crossfade.at.toFixed(2)} s`);
+  // Gapless keeps the whole natural fade-out and drops only the dead air. The
+  // fade crosses the 0.02 silence floor at 190 - 10 * 0.02 / 0.6 = 189.67 s.
+  const audibleEnd = 190 - (10 * 0.02) / 0.6;
+  const gapless = mixOutPoint(fading, 200, false);
+  assert.ok(Math.abs(gapless.at - audibleEnd) < 0.05,
+    `the gapless join let go at ${gapless.at.toFixed(2)} s`);
+
+  // A long quiet coda is cut by at most MAX_OUTRO_CUT_SEC, not thrown away.
+  const coda = score((t) => (t < 160 ? 0.6 : t < 195 ? 0.1 : 0));
+  const kept = mixOutPoint(coda, 200, true);
+  assert.ok(Math.abs(kept.at - (195 - MAX_OUTRO_CUT_SEC)) < 0.1,
+    `a 35 s coda was cut to ${kept.at.toFixed(2)} s`);
+
+  // A partial score covers only the opening; trusting it would cut every track.
+  assert.deepEqual(mixOutPoint({ ...fading, analysis: { is_partial: true } }, 200, true),
+    { at: 200, fromScore: false });
+  assert.deepEqual(mixOutPoint(null, 200, true), { at: 200, fromScore: false });
+  // A bad analysis cannot cost a track more than a quarter of itself.
+  const broken = score((t) => (t < 60 ? 0.6 : 0));
+  assert.equal(mixOutPoint(broken, 200, false).at, 150);
+  console.log('fade placement: 8/8 pass (outro start, audible end, coda cap, fallbacks)');
+
+  // --- The watcher picks the score up when it lands -----------------------------
+  // The fade point used to be computed once, when the track started, against a
+  // score that had not arrived yet - so it was always the stated length.
+  const player = new GuildPlayer('g');
+  player.setCrossfade(6);
+  player.decks.queue.add({ provider: 'p', providerId: 'A', title: 'A', durationSec: 200 });
+  player.decks.queue.index = 0;
+  let joinedAt = null;
+  player.startTransition = async (stated, mixOut) => { joinedAt = mixOut; };
+  player.positionSec = () => 180;
+
+  await player.checkTransition(200);
+  assert.equal(joinedAt, null, 'with no score yet, 180 s is not near the stated end');
+  player.score = fading;
+  await player.checkTransition(200);
+  assert.ok(joinedAt?.fromScore && Math.abs(joinedAt.at - 185) < 0.6,
+    'the score arrived after the track started and the fade point ignored it');
+
+  // Seeked into the outro, past where the fade would have begun: let go at the
+  // audible end instead of cutting straight to the next track.
+  joinedAt = null;
+  player.positionSec = () => 187;
+  await player.checkTransition(200);
+  assert.ok(joinedAt && Math.abs(joinedAt.at - audibleEnd) < 0.05,
+    `a seek into the outro was cut at ${joinedAt?.at}`);
+  player.cancelTransition();
+  console.log('fade point follows the score: 3/3 pass (late score, seek into the outro)');
+}
+
+// --- The clock after a skipped lead-in ------------------------------------------------
+// The incoming track starts past the silence it opens with. The visuals index
+// the score by position, so the offset has to carry that silence or they run
+// behind the audio by exactly the amount that was cut.
+{
+  const player = new GuildPlayer('g');
+  player.setCrossfade(8);
+  for (const id of ['A', 'B']) {
+    player.decks.queue.add({ provider: 'p', providerId: id, title: id, durationSec: 200 });
+  }
+  player.decks.queue.index = 0;
+  player.onTrackStart = () => {};
+  player.prefetched = { key: 'p:B', path: 'b.webm' };
+  player.transition = {
+    startsAtSec: 0, handoverAtSec: 4, trackKey: 'p:B', toGain: -3.5, toOffsetSec: 2.45,
+  };
+  player.completeTransition();
+  assert.equal(player.queue.current().title, 'B');
+  assert.equal(player.seekOffsetSec, 2.45, 'the skipped silence is missing from the clock');
+  // At the handover the joined stream has run 4 s, so B is 6.45 s into itself.
+  const at = GuildPlayer.prototype.positionSec.call({
+    seekOffsetSec: player.seekOffsetSec,
+    player: { state: { status: 'playing', resource: { playbackDuration: 4000 } } },
+  });
+  assert.ok(Math.abs(at - 6.45) < 1e-9, `B's position read ${at}`);
+  // A seek on B restarts it at B's own level, not the outgoing track's.
+  assert.equal(player.gainDb, -3.5, 'the new track kept the old track\'s gain');
+  player.cancelTransition();
+  console.log('lead-in clock: 4/4 pass (offset carries the silence, gain handed over)');
 }

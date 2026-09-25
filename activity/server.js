@@ -39,6 +39,7 @@ import { TrafficSummary, requestLogger, logger } from './server/log.js';
 import { AnalyserWorker } from './server/analyser.js';
 import { TokenVerifier, AuthError, bearerToken } from './server/auth.js';
 import { ArtistInfo } from './server/artistinfo.js';
+import { LoudnessCache } from './server/loudness.js';
 import { fetchProxiedImage, ImageProxyError } from './server/imageproxy.js';
 import { scoreCache, imageCache } from './server/cache.js';
 import { loadConfig } from './server/config.js';
@@ -242,6 +243,10 @@ const updates = logger('update');
 /** Group-size lookups, cached to disk and rate limited. */
 const artistInfo = new ArtistInfo(CACHE_DIR);
 await artistInfo.load();
+
+// Every track's loudness is measured once and kept, so each plays at the same
+// level and none reaches the encoder hot enough to clip. See loudness.js.
+const loudness = new LoudnessCache(CACHE_DIR);
 
 /**
  * Work out the cast size for a track and attach it.
@@ -450,6 +455,7 @@ function prunePendingSearches() {
  */
 function preparePlayer(player, channel = null) {
   player.loadAudio = (track) => fetchAudio(track, CACHE_DIR);
+  player.measureLoudness = (track, audioPath) => loudness.get(track, audioPath);
 
   // Stored settings, applied once per player.
   //

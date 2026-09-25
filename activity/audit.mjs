@@ -15,7 +15,7 @@ const GLOBALS = new Set([
   'Boolean','Error','RegExp','Symbol','parseInt','parseFloat','isNaN','isFinite',
   'setTimeout','setInterval','clearTimeout','clearInterval','fetch','URL','URLSearchParams',
   'window','document','performance','requestAnimationFrame','cancelAnimationFrame',
-  'Float32Array','Uint8Array','Int16Array','ArrayBuffer','Buffer','process','undefined',
+  'Float32Array','Float64Array','Uint8Array','Int16Array','ArrayBuffer','Buffer','process','undefined',
   'NaN','Infinity','globalThis','structuredClone','TextEncoder','TextDecoder','WebSocket',
   'HTMLElement','Image','Audio','navigator','location','history','localStorage','alert',
   'BigInt','Intl','WeakMap','WeakSet','Proxy','Reflect','queueMicrotask','AbortController',

@@ -22,7 +22,6 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
 import {
   generateDependencyReport,
   joinVoiceChannel,
@@ -36,6 +35,7 @@ import {
   getVoiceConnection,
 } from '@discordjs/voice';
 import { DeckSet } from './decks.js';
+import { LIMITER, gainDb, gainFilter } from './loudness.js';
 
 /** @type {Map<string, GuildPlayer>} */
 const players = new Map();
@@ -104,6 +104,157 @@ export const GAPLESS_LEAD_SEC = 3;
 const TRANSITION_TICK_MS = 100;
 
 /**
+ * How long the outro of a track may be cut short to put the fade on music
+ * rather than on the song's own fade-out, in seconds.
+ *
+ * The fade used to end where the track stopped being audible, which puts all
+ * of it over the song's natural decay: the outgoing track is already fading on
+ * its own, and there is little of it left to blend. Measured over every
+ * ordered pair of the 22 fully analysed tracks in the cache (462 joins), the
+ * share of a 6 s fade in which *both* songs sat at half their typical level or
+ * more - an audible blend rather than one song over the other's silence:
+ *
+ * | fade point                                  |  2 s |  6 s | 12 s |
+ * |---------------------------------------------|------|------|------|
+ * | end of the file (what actually shipped)     |   0% |   6% |  19% |
+ * | audible end (what the code intended)        |   6% |  20% |  35% |
+ * | outro start, capped at 8 s, next from 0     |  17% |  38% |  48% |
+ * | ...and the next track's silence skipped     |  34% |  46% |  53% |
+ *
+ * The first row is why the slider seemed to make no difference: a 2 s fade
+ * sat entirely inside the trailing silence, median 2.8 s and up to 8.8 s. The
+ * cap keeps a long quiet coda mostly intact - it costs 2.8 s of outro on
+ * average and never more than 8.
+ */
+export const MAX_OUTRO_CUT_SEC = 8;
+
+/**
+ * Energy below which a frame counts as silence. Lane values are normalised
+ * 0-1 and rounded to 3 dp, so the floor has to sit above the rounding.
+ */
+const SILENCE_FLOOR = 0.02;
+
+/**
+ * Where to let go of the outgoing track, from its score.
+ *
+ * A crossfade lets go where the outro starts falling - the last second at
+ * half the track's typical level or more - so the fade is spent on music; see
+ * {@link MAX_OUTRO_CUT_SEC}. A gapless join lets go at the audible end, keeping
+ * the whole natural fade-out and dropping only the dead air after it, which is
+ * the gap a gapless join exists to remove.
+ *
+ * Falls back to the stated duration whenever the score cannot answer: a
+ * partial score covers only the opening of the track, so its lane ends long
+ * before the music does and trusting it would cut every track short.
+ *
+ * Exported and pure so the placement can be tested against real scores.
+ *
+ * @param {object|null} score The outgoing track's VisualScore.
+ * @param {number} stated The provider's duration, in seconds.
+ * @param {boolean} crossfade True for a crossfade, false for a gapless join.
+ * @returns {{at: number, fromScore: boolean}}
+ */
+export function mixOutPoint(score, stated, crossfade) {
+  const lanes = score?.lanes;
+  if (!score || score.analysis?.is_partial || !lanes?.fps
+      || !Array.isArray(lanes.energy) || lanes.energy.length === 0) {
+    return { at: stated, fromScore: false };
+  }
+  const { energy, fps } = lanes;
+
+  let last = -1;
+  for (let i = energy.length - 1; i >= 0; i--) {
+    if (energy[i] > SILENCE_FLOOR) {
+      last = i;
+      break;
+    }
+  }
+  if (last < 0) return { at: stated, fromScore: false };
+  let at = (last + 1) / fps;
+
+  if (crossfade) {
+    const audible = [];
+    for (const value of energy) if (value > SILENCE_FLOOR) audible.push(value);
+    audible.sort((a, b) => a - b);
+    const typical = audible[Math.floor(audible.length / 2)];
+
+    // A one-second average, so a single quiet beat in the last chorus does not
+    // read as the outro beginning.
+    const half = Math.max(1, Math.round(fps / 2));
+    const prefix = new Float64Array(energy.length + 1);
+    for (let i = 0; i < energy.length; i++) prefix[i + 1] = prefix[i] + energy[i];
+    const mean = (i) => {
+      const from = Math.max(0, i - half);
+      const to = Math.min(energy.length, i + half);
+      return (prefix[to] - prefix[from]) / (to - from);
+    };
+
+    let outro = last;
+    while (outro > 0 && mean(outro) < typical * 0.5) outro -= 1;
+    at = Math.max((outro + 1) / fps, at - MAX_OUTRO_CUT_SEC);
+  }
+
+  // Never past the stated end, and never so early that a bad analysis costs
+  // the track a recognisable amount of itself.
+  return { at: Math.max(stated * 0.75, Math.min(stated, at)), fromScore: true };
+}
+
+/**
+ * How every decoder hands its audio to discord.js: Ogg Opus, encoded by
+ * ffmpeg's own libopus.
+ *
+ * ## One encoder, whichever way a track started
+ *
+ * A track used to reach listeners through one of two encoders depending on
+ * how it began. A normal start went through discord.js's own ffmpeg, which on
+ * a build with libopus encodes straight from the decoder's float output. A
+ * seek or a transition came through our ffmpeg as 16-bit PCM and was encoded
+ * by opusscript, a WebAssembly build of the same codec, on the Node event
+ * loop. The 16-bit step is where overs were hard-clipped - 423,815 samples of
+ * the worst cached track - so a song could sound clean until someone seeked,
+ * and distort after.
+ *
+ * Every path now ends here: no 16-bit stage, the same encoder however a track
+ * began, and the encoding done in ffmpeg's process rather than in the one that
+ * also serves the Activity.
+ *
+ * `-b:a 96k` and `-frame_duration 20` are ffmpeg's defaults, written out
+ * because two things depend on them. 96k is what normal playback always sent.
+ * And `playbackDuration`, the clock every visualisation follows, adds 20 ms
+ * for each packet it reads: any other frame size and the visuals would drift
+ * from the audio by the ratio.
+ */
+const OPUS_OUTPUT = [
+  '-acodec', 'libopus', '-b:a', '96k', '-frame_duration', '20',
+  '-f', 'opus', '-ar', '48000', '-ac', '2',
+  'pipe:1',
+];
+
+/**
+ * Build the ffmpeg invocation that plays one track from an offset.
+ *
+ * Exported and pure so the chain every listener hears can be tested - above
+ * all, that no path reaches the encoder without the limiter.
+ *
+ * @param {object} options
+ * @param {string} options.file Audio file.
+ * @param {number} [options.position] Where to start, in seconds.
+ * @param {number} [options.gain] Loudness-matching gain, in dB.
+ * @returns {string[]}
+ */
+export function playbackArgs({ file, position = 0, gain = 0 }) {
+  return [
+    '-nostdin', '-loglevel', 'error',
+    // Before -i, so this is a container-index seek rather than a decode from
+    // the start of the file: near-instant however far in it lands.
+    ...(position > 0 ? ['-ss', String(position)] : []),
+    '-i', file,
+    '-af', `${gainFilter(gain)},${LIMITER}`,
+    ...OPUS_OUTPUT,
+  ];
+}
+
+/**
  * Build the ffmpeg invocation that joins two tracks into one stream.
  *
  * Exported and pure so the filter graph can be tested. It is the part that is
@@ -117,60 +268,60 @@ const TRANSITION_TICK_MS = 100;
  * remain. A six-second crossfade produced exactly 20.000s of output
  * (tail + incoming - fade = 6 + 20 - 6) and a gapless join exactly 26.000s
  * (6 + 20), both at exit 0 - which is what confirms `-ss` is being read as an
- * input option rather than decoding the whole file first. Peak level through
- * the fade went 0.087 at the start, 0.078 in the middle, 0.088 after: a slight
- * dip and no bump, which is the equal-gain behaviour `tri` is chosen for.
+ * input option rather than decoding the whole file first.
+ *
+ * ## The curve is equal-power
+ *
+ * `qsin` on both sides. `tri` is a linear, equal-gain fade, and crossing two
+ * uncorrelated signals linearly puts each at half amplitude in the middle,
+ * which sums to 0.707 of full power - the textbook 3 dB hole, and two
+ * different songs are uncorrelated for practical purposes. Measured on two
+ * uncorrelated pink-noise sources with a 6 s fade, level at the centre of the
+ * join against the same sources alone:
+ *
+ *   tri -3.00 dB, qsin -0.20 dB, hsin -2.77 dB, esin -7.78 dB
+ *
+ * On a real pair from the cache, with only the curve changed, mid-fade RMS was
+ * 0.13983 under `tri` and 0.19611 under `qsin`: the join holds 2.93 dB more
+ * level. That sag in the middle was what "the crossfade is not smooth" sounded
+ * like.
+ *
+ * ## Each track is matched before they meet
+ *
+ * The gain is applied to each input separately, ahead of the join. Matching
+ * after the mix would apply one gain to two songs that need different ones,
+ * and a crossfade from a -3.6 LUFS track into a -14.7 LUFS one - both in the
+ * cache - would still be an 11 dB lurch. The limiter comes after the join,
+ * because two songs at equal power still sum above either on a shared
+ * transient; it is the one every path ends in.
  *
  * @param {object} options
  * @param {string} options.fromPath Outgoing track's file.
  * @param {string} options.toPath Incoming track's file.
  * @param {number} options.position Where the outgoing track is now, in seconds.
  * @param {number} options.fade Crossfade length in seconds; 0 joins gaplessly.
+ * @param {number} [options.fromLength] How much of the outgoing track a
+ *   gapless join takes, in seconds. A crossfade always takes exactly its fade.
+ *   Left out, the join keeps the rest of the file.
+ * @param {number} [options.toOffset] Where the incoming track starts, in
+ *   seconds: past the silence it opens with.
+ * @param {number} [options.fromGain] Outgoing track's loudness gain, in dB.
+ * @param {number} [options.toGain] Incoming track's loudness gain, in dB.
  * @returns {string[]}
  */
-export function transitionArgs({ fromPath, toPath, position, fade }) {
-  const filter = fade > 0
-    // `tri` on both sides: equal-gain rather than equal-power. Equal-power
-    // holds the sum roughly constant, which is right for uncorrelated material
-    // and wrong here - two tracks at similar loudness sum to an audible bump in
-    // the middle of every transition.
-    //
-    // The limiter is not optional. Modern masters peak within a whisker of full
-    // scale, so two of them at half gain reach it exactly and any correlation
-    // goes over: measured on two cached tracks, the fade peaked at 1.0000 with
-    // six samples pinned at full scale, which is audible as a crackle right in
-    // the middle of the transition. At limit 0.97 the peak lands at 0.9742 with
-    // none pinned, and RMS moves 0.1543 to 0.1534 - a twentieth of a percent,
-    // so it costs no loudness worth hearing.
-    //
-    // `level=disabled` stops alimiter normalising the whole stream up to its
-    // ceiling, which would make every track after a transition louder than it
-    // was before one.
-    //
-    // `qsin` rather than `tri`. `tri` is a linear fade, and crossing two
-    // uncorrelated signals linearly puts each at half amplitude in the middle,
-    // which sums to 0.707 of full power - the textbook 3 dB hole. Measured on
-    // two uncorrelated pink-noise sources with a 6 s fade, level at the centre
-    // of the join against the same sources playing alone:
-    //
-    //   tri -3.00 dB, qsin -0.20 dB, hsin -2.77 dB, esin -7.78 dB
-    //
-    // Confirmed on a real pair from the cache, where only the curve differed:
-    // mid-fade RMS 0.13983 under `tri` against 0.19611 under `qsin`, so the
-    // join holds 2.93 dB more level. That sag in the middle is what "the
-    // crossfade is not smooth" sounds like. The extra level does not cost
-    // headroom: peak went 0.9153 to 0.9427 with no sample at full scale, so
-    // the limiter below still has room.
-    ? `[0:a][1:a]acrossfade=d=${fade.toFixed(3)}:c1=qsin:c2=qsin,`
-      + 'alimiter=limit=0.97:attack=5:release=50:level=disabled[out]'
-    // `concat` plays one track then the other and never sums them, so there is
-    // nothing here that can clip.
-    : '[0:a][1:a]concat=n=2:v=0:a=1[out]';
+export function transitionArgs({
+  fromPath, toPath, position, fade, fromLength, toOffset = 0, fromGain = 0, toGain = 0,
+}) {
+  const inputs = `[0:a]${gainFilter(fromGain)}[a0];[1:a]${gainFilter(toGain)}[a1];`;
+  const join = fade > 0
+    ? `[a0][a1]acrossfade=d=${fade.toFixed(3)}:c1=qsin:c2=qsin`
+    : '[a0][a1]concat=n=2:v=0:a=1';
+  const take = fade > 0 ? fade : fromLength;
 
   return [
-    '-loglevel', 'error',
+    '-nostdin', '-loglevel', 'error',
     // Before -i, so this is a container-index seek rather than a decode from
-    // the start of the file - the same reason `seek()` puts it there.
+    // the start of the file - the same reason `playbackArgs` puts it there.
     '-ss', String(position),
     // Trimmed to exactly the fade, and this is not an optimisation.
     //
@@ -181,15 +332,49 @@ export function transitionArgs({ fromPath, toPath, position, fade }) {
     // its first eight seconds, because the fade was still 247 seconds away.
     //
     // Trimming makes the fade begin at the join by construction, which is also
-    // what makes `startsAtSec = 0` true for the incoming track's clock.
-    ...(fade > 0 ? ['-t', fade.toFixed(3)] : []),
+    // what makes `startsAtSec = 0` true for the incoming track's clock. A
+    // gapless join is trimmed at the audible end for the same reason: `concat`
+    // starts the next track wherever the first input stops, and the clock's
+    // handover offset is only right if that is where it was told.
+    ...(take > 0 ? ['-t', take.toFixed(3)] : []),
     '-i', fromPath,
+    // The incoming track's opening silence is skipped: during a join it is a
+    // gap in the middle of the fade, or at the head of a gapless one.
+    ...(toOffset > 0 ? ['-ss', toOffset.toFixed(3)] : []),
     '-i', toPath,
-    '-filter_complex', filter,
+    '-filter_complex', `${inputs}${join},${LIMITER}[out]`,
     '-map', '[out]',
-    '-f', 's16le', '-ar', '48000', '-ac', '2',
-    'pipe:1',
+    ...OPUS_OUTPUT,
   ];
+}
+
+/**
+ * Start an ffmpeg that feeds the player, with its stderr drained.
+ *
+ * Draining matters more than it looks. Nothing read these processes' stderr,
+ * and a pipe nobody reads holds 64 KB before the writer blocks: a damaged file
+ * that logs an error for every frame would stall its own playback mid-song.
+ * The tail is kept so an unexpected exit can say why.
+ *
+ * @param {string[]} args
+ * @param {string} label For the log.
+ * @returns {import('node:child_process').ChildProcess}
+ */
+function spawnDecoder(args, label) {
+  const ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let tail = '';
+  ffmpeg.stderr.on('data', (chunk) => {
+    tail = (tail + chunk).slice(-2048);
+  });
+  ffmpeg.on('error', (error) => console.error(`[${label}] ffmpeg:`, error.message));
+  ffmpeg.on('close', (code, signal) => {
+    // Killed on purpose by every skip, seek and join; only an exit nobody asked
+    // for is worth a line.
+    if (code && signal !== 'SIGKILL') {
+      console.error(`[${label}] ffmpeg exited ${code}: ${tail.trim().split('\n').pop() ?? ''}`);
+    }
+  });
+  return ffmpeg;
 }
 
 export class GuildPlayer {
@@ -223,7 +408,10 @@ export class GuildPlayer {
      * fade into without waiting for a download.
      *
      * `prefetchUpcoming` was already fetching it and throwing the path away.
-     * @type {{key: string, path: string}|null}
+     * It carries the track's loudness gain and opening silence too, measured
+     * before the track is marked ready, so a transition never waits on a
+     * measurement at the moment it has to start.
+     * @type {{key: string, path: string, gain?: number, leadInSec?: number}|null}
      */
     this.prefetched = null;
 
@@ -236,7 +424,8 @@ export class GuildPlayer {
      * starts, so the queue advances - and the clock switches over - at the right
      * moment rather than on a wall-clock guess. Cleared the instant the handover
      * happens, because a stale one here stops the *next* transition ever arming.
-     * @type {{startsAtSec: number, handoverAtSec: number}|null}
+     * @type {{startsAtSec: number, handoverAtSec: number, trackKey?: string,
+     *   toGain?: number, toOffsetSec?: number}|null}
      */
     this.transition = null;
     /**
@@ -252,12 +441,43 @@ export class GuildPlayer {
     this.decoder = null;
 
     /**
+     * Loudness-matching gain for the track now playing, in dB, so a seek
+     * restarts it at the same level rather than at unity.
+     */
+    this.gainDb = 0;
+
+    /**
+     * Counts every deliberate change to what is playing.
+     *
+     * Starting a track awaits a download and a measurement, and two starts can
+     * overlap: skip twice quickly and both are in flight. Whichever finished
+     * last used to win, so a slow first download could play its song under the
+     * second one's title. A start that sees this move while it waited stands
+     * down instead. Stopping moves it too, which is what stops a download that
+     * lands after /stop from starting the song anyway.
+     */
+    this.generation = 0;
+
+    /** Last fade point computed, keyed on the score it came from. */
+    this.mixOutMemo = null;
+
+    /**
      * Supplied by the server: given a track, download its audio and return the
      * path. Injected rather than imported so this module stays free of provider
      * and filesystem policy.
      * @type {null | ((track: object) => Promise<string>)}
      */
     this.loadAudio = null;
+
+    /**
+     * Supplied by the server: a track's loudness, true peak and opening
+     * silence, cached per track. Optional - without it every track plays at
+     * unity gain through the limiter, which is the old behaviour less the
+     * clipping.
+     * @type {null | ((track: object, audioPath: string) =>
+     *   Promise<{lufs: number, truePeak: number, leadInSec?: number}|null>)}
+     */
+    this.measureLoudness = null;
     /** Identity of the track being fetched ahead, so only one runs at a time. */
     this.prefetching = null;
 
@@ -308,6 +528,10 @@ export class GuildPlayer {
     // `expectIdle = true` and cleared it synchronously, while the Idle event it
     // was guarding arrives asynchronously - so a seek or a track change could
     // trigger a spurious advance and skip a song.
+    //
+    // The comparison only protects anything when a resource is disowned
+    // *before* the decoder feeding it is killed, which is `retireAudio`'s job.
+    // Killing first let the drained stream arrive here still marked as ours.
     this.player.on('stateChange', (oldState, newState) => {
       if (newState.status !== oldState.status) {
         console.log(`[voice ${guildId}] ${oldState.status} -> ${newState.status}`);
@@ -382,17 +606,27 @@ export class GuildPlayer {
     const track = this.queue.current();
     if (!track) return null;
 
-    this.cancelTransition();
-    this.rememberPlayed(track);
+    this.retireAudio();
+    const generation = this.generation;
     this.releaseAudio();
     this.score = null;
     this.seekOffsetSec = 0;
 
-    this.audioPath = await this.loadAudio(track);
+    const audioPath = await this.loadAudio(track);
+    const { gain } = await this.levelsFor(track, audioPath);
+    // Superseded while it waited: a newer start, a skip or a stop owns the
+    // player now, and playing this would put one song under another's title.
+    if (generation !== this.generation) return this.queue.current();
 
-    const resource = createAudioResource(createReadStream(this.audioPath), {
-      inputType: StreamType.Arbitrary,
-    });
+    // Recorded once the audio is certain to start, not before the download: a
+    // start that was superseded was never heard.
+    this.rememberPlayed(track);
+    this.audioPath = audioPath;
+    this.gainDb = gain;
+    // Our own decoder rather than handing discord.js the file, so this path
+    // gets the same loudness matching and limiter as every other.
+    this.decoder = spawnDecoder(playbackArgs({ file: audioPath, gain }), `voice ${this.guildId}`);
+    const resource = createAudioResource(this.decoder.stdout, { inputType: StreamType.OggOpus });
     this.currentResource = resource;
     this.player.play(resource);
 
@@ -424,15 +658,16 @@ export class GuildPlayer {
     // ends the way it always did. Live streams and anything the provider gave
     // no length for land here.
     if (stated <= 0) return;
-    // Only a crossfade wants the audible end. A gapless join plays the outgoing
-    // track through to its real end and then continues, so trimming its outro
-    // would be removing part of the song for no reason - and it would put the
-    // handover offset out by the length of that outro, because `concat` keeps
-    // audio the audible end says is not there.
-    const duration = this.crossfadeSec > 0 ? this.audibleEndSec(stated) : stated;
 
+    // The stated length goes in, not a fade point. Where the fade belongs
+    // depends on the score, and the score does not exist yet: `onTrackStart`
+    // has only just asked for it, and even a cache hit is a file read away.
+    // This used to compute the point here, once, against that null score - so
+    // every transition was aimed at the end of the *file*, trailing silence and
+    // all, and the audible-end logic never ran outside a seek. The watcher now
+    // asks on every tick, and picks the score up the moment it lands.
     this.transitionTimer = setInterval(() => {
-      this.checkTransition(duration).catch((error) => {
+      this.checkTransition(stated).catch((error) => {
         console.error(`[voice ${this.guildId}] transition failed:`, error.message);
         this.cancelTransition();
       });
@@ -440,66 +675,92 @@ export class GuildPlayer {
   }
 
   /**
-   * Where the track stops being audible, rather than where its file ends.
+   * Where to let go of the current track, from its score when there is one.
    *
-   * ## Why a crossfade against the stated duration is inaudible
-   *
-   * Almost every produced track ends by decaying to silence, and fading the
-   * last few seconds before the stated end means fading that decay - so there
-   * is nothing left of the outgoing track to cross with. Measured on a real
-   * pair from the cache: the last six seconds of the outgoing track run 0.021,
-   * 0.010, 0.005, 0.002, 0.0002, 0.000 RMS. By two seconds in it is already a
-   * fiftieth of its level, and the "crossfade" is silence fading into the next
-   * song - which is exactly what a hard skip sounds like.
-   *
-   * The energy lane already knows where the music stops. Walking back from the
-   * end to the last frame above the floor puts the fade over material that is
-   * actually playing, so the two tracks genuinely overlap.
-   *
-   * Falls back to the stated duration whenever the score cannot answer: a
-   * partial score covers only the opening of the track, so its lane ends long
-   * before the music does and trusting it would cut every track short.
+   * Memoised on the score object: the watcher asks ten times a second, and the
+   * answer only changes when the provisional score is replaced by the full one
+   * or the setting moves between crossfade and gapless.
    *
    * @param {number} stated The provider's duration, in seconds.
-   * @returns {number}
+   * @returns {{at: number, fromScore: boolean}}
    */
-  audibleEndSec(stated) {
-    const lanes = this.score?.lanes;
-    if (this.score?.analysis?.is_partial) return stated;
-    if (!lanes?.fps || !Array.isArray(lanes.energy) || lanes.energy.length === 0) {
-      return stated;
+  mixOutSec(stated) {
+    const crossfade = this.crossfadeSec > 0;
+    const memo = this.mixOutMemo;
+    if (memo && memo.score === this.score && memo.crossfade === crossfade
+        && memo.stated === stated) {
+      return memo.value;
     }
-    // Lane values are normalised 0-1 and rounded to 3dp, so the floor has to
-    // sit above the rounding rather than at zero.
-    const FLOOR = 0.02;
-    for (let i = lanes.energy.length - 1; i >= 0; i--) {
-      if (lanes.energy[i] > FLOOR) {
-        const end = (i + 1) / lanes.fps;
-        // Never past the stated end, and never so early that the track would
-        // lose a recognisable amount of itself to a bad analysis.
-        return Math.max(stated * 0.75, Math.min(stated, end));
-      }
-    }
-    return stated;
+    const value = mixOutPoint(this.score, stated, crossfade);
+    this.mixOutMemo = { score: this.score, crossfade, stated, value };
+    return value;
   }
 
-  /** Stop the watcher without disturbing a transition already under way. */
+  /**
+   * The loudness gain and opening silence for a track. Never throws.
+   *
+   * @param {object} track
+   * @param {string} audioPath
+   * @returns {Promise<{gain: number, leadInSec: number}>}
+   */
+  async levelsFor(track, audioPath) {
+    if (!this.measureLoudness) return { gain: 0, leadInSec: 0 };
+    try {
+      const measured = await this.measureLoudness(track, audioPath);
+      return { gain: gainDb(measured), leadInSec: measured?.leadInSec ?? 0 };
+    } catch {
+      return { gain: 0, leadInSec: 0 };
+    }
+  }
+
   stopTransitionTimer() {
     if (this.transitionTimer) clearInterval(this.transitionTimer);
     this.transitionTimer = null;
   }
 
   /**
-   * Abandon any pending or in-flight transition.
+   * Drop any pending or in-flight transition's bookkeeping.
    *
-   * Anything that changes what is playing has to call this: a skip, a seek, a
-   * jump or a stop all invalidate a transition that was scheduled against a
-   * track that is no longer the one playing. Leaving one armed would splice the
-   * previous track's successor into whatever the user actually asked for.
+   * Only the bookkeeping. This used to kill the decoder too, which was right
+   * while the decoder could only be a transition's - and wrong once a seek or a
+   * completed join left the rest of the song playing through it: switching
+   * transitions off killed the song and started the next. Stopping audio is
+   * {@link retireAudio}'s job, because it has to disown the resource first.
    */
   cancelTransition() {
     this.stopTransitionTimer();
     this.transition = null;
+  }
+
+  /**
+   * Stop whatever is feeding the player, on purpose.
+   *
+   * Anything that changes what is playing comes through here: a skip, a seek,
+   * a jump, a new track or a stop. Each invalidates a transition scheduled
+   * against the track that was playing, and each has to take the old audio
+   * away without the player mistaking that for the track ending by itself.
+   *
+   * ## The order is the fix
+   *
+   * The resource is disowned *before* its decoder is killed. Killing ends the
+   * stream; the player drains it and goes Idle a few frames later; and the
+   * Idle handler advances the queue for any resource still marked as the one
+   * playing. `advance` and `startCurrent` used to kill first and only replace
+   * the resource after awaiting a download, so that stale Idle landed in the
+   * gap and advanced the queue a second time.
+   *
+   * Measured with a real AudioPlayer and a 500 ms download standing in for a
+   * fetch: skipping from A in a queue of A, B, C started B and then C;
+   * skipping on the last track announced the end of the queue twice - the
+   * doubled "Queue finished" seen in a live channel; and switching transitions
+   * off mid-song killed the song and started the next. Every track after a
+   * seek or a join played through our own decoder and was exposed, which with
+   * crossfade on is every track after the first.
+   */
+  retireAudio() {
+    this.generation += 1;
+    this.currentResource = null;
+    this.cancelTransition();
     this.killDecoder();
   }
 
@@ -527,9 +788,9 @@ export class GuildPlayer {
    * running reaches the incoming track, and start one when the outgoing track
    * gets near enough to its end.
    *
-   * @param {number} duration Length of the outgoing track, in seconds.
+   * @param {number} stated The outgoing track's stated length, in seconds.
    */
-  async checkTransition(duration) {
+  async checkTransition(stated) {
     if (this.transition) {
       // `playbackDuration` counts from the start of the joined resource, and
       // the incoming track begins at a known offset within it. Reaching that
@@ -544,7 +805,15 @@ export class GuildPlayer {
     }
 
     const lead = this.crossfadeSec > 0 ? this.crossfadeSec : GAPLESS_LEAD_SEC;
-    if (this.positionSec() < duration - lead) {
+    const position = this.positionSec();
+    let mixOut = this.mixOutSec(stated);
+    // Seeked past where the fade would have begun: someone chose to hear the
+    // outro. Letting go at the audible end instead keeps the watcher from
+    // cutting straight to the next track the moment it notices.
+    if (mixOut.fromScore && position > mixOut.at) {
+      mixOut = mixOutPoint(this.score, stated, false);
+    }
+    if (position < mixOut.at - lead) {
       // The prefetch used to be kicked off only on a track change, so a track
       // queued *during* playback was never fetched and `startTransition` bailed
       // silently on the file not being on disk. Queueing the next song while
@@ -559,7 +828,7 @@ export class GuildPlayer {
     // stops here - a failed attempt retried every tick would spawn a decoder
     // ten times a second for the rest of the track.
     this.stopTransitionTimer();
-    await this.startTransition(duration);
+    await this.startTransition(stated, mixOut);
   }
 
   /**
@@ -581,9 +850,10 @@ export class GuildPlayer {
    * track's true position - still a measurement of audio actually transmitted,
    * which is the property that made the clock trustworthy in the first place.
    *
-   * @param {number} duration Length of the outgoing track, in seconds.
+   * @param {number} stated The outgoing track's stated length, in seconds.
+   * @param {{at: number, fromScore: boolean}} [mixOut] Where to let go of it.
    */
-  async startTransition(duration) {
+  async startTransition(stated, mixOut = { at: stated, fromScore: false }) {
     // The same lookup `prefetchUpcoming` uses, deliberately: the only file this
     // can join to is the one the prefetch decided to fetch.
     const next = this.queue.upcoming()[0];
@@ -606,7 +876,7 @@ export class GuildPlayer {
           ? 'still fetching' : 'no fetch in flight'})`);
       return;
     }
-    const nextPath = this.prefetched.path;
+    const { path: nextPath, gain: toGain = 0, leadInSec = 0 } = this.prefetched;
     if (!this.audioPath) {
       console.log(`[voice ${this.guildId}] no transition: the outgoing track `
         + 'has no file on disk');
@@ -614,23 +884,27 @@ export class GuildPlayer {
     }
 
     const position = this.positionSec();
-    const tail = Math.max(0, duration - position);
+    const tail = Math.max(0, mixOut.at - position);
     const fade = this.crossfadeSec;
     // A fade cannot be longer than what is left to fade out of. Near the end of
     // a track shorter than the setting, this shortens it rather than refusing.
     const effective = Math.min(fade, tail);
+    // A gapless join takes the tail only up to the audible end, when the score
+    // found one, so the trailing silence is not part of the join. Without a
+    // score it keeps the rest of the file, as it always did: `tail` is then
+    // measured from provider metadata, and trimming to that could cut real
+    // audio or leave the handover offset out by however far the metadata is.
+    const fromLength = mixOut.fromScore ? tail : undefined;
 
-    // Whatever was feeding the player is about to be replaced.
+    // Whatever was feeding the player is replaced in this same tick, so the
+    // old resource cannot go Idle in between and advance the queue.
     this.killDecoder();
-    const ffmpeg = spawn('ffmpeg', transitionArgs({
+    this.decoder = spawnDecoder(transitionArgs({
       fromPath: this.audioPath, toPath: nextPath, position, fade: effective,
-    }));
-    ffmpeg.on('error', (error) => console.error('[transition] ffmpeg:', error.message));
-    this.decoder = ffmpeg;
+      fromLength, toOffset: leadInSec, fromGain: this.gainDb, toGain,
+    }), `voice ${this.guildId}`);
+    const resource = createAudioResource(this.decoder.stdout, { inputType: StreamType.OggOpus });
 
-    const resource = createAudioResource(ffmpeg.stdout, { inputType: StreamType.Raw });
-    // The incoming track's zero: immediate under a crossfade, after the
-    // outgoing tail under a gapless join.
     // Two different moments, and conflating them is what made the title wrong.
     //
     // `startsAtSec` is where the incoming track's zero sits inside the joined
@@ -655,6 +929,12 @@ export class GuildPlayer {
       // can be edited while the join plays, and without this the handover
       // advances to whatever is next *now* and attributes this audio to it.
       trackKey: key,
+      toGain,
+      // Where the incoming track's own clock starts inside its file: past the
+      // silence the join skipped. The visuals index the score by this clock,
+      // so an offset left at zero would run them behind the audio by exactly
+      // the silence that was cut.
+      toOffsetSec: leadInSec,
     };
 
     this.currentResource = resource;
@@ -668,7 +948,7 @@ export class GuildPlayer {
 
     // Restart the watcher: it now has the handover to detect.
     this.transitionTimer = setInterval(() => {
-      this.checkTransition(duration).catch(() => {});
+      this.checkTransition(stated).catch(() => {});
     }, TRANSITION_TICK_MS);
   }
 
@@ -683,6 +963,8 @@ export class GuildPlayer {
    */
   completeTransition() {
     const startsAtSec = this.transition?.startsAtSec ?? 0;
+    const toOffsetSec = this.transition?.toOffsetSec ?? 0;
+    const toGain = this.transition?.toGain ?? 0;
     const joined = this.transition?.trackKey ?? null;
 
     // The queue can be edited while a join is playing. If the track that is
@@ -739,7 +1021,12 @@ export class GuildPlayer {
     // `|| 0` only to turn -0 into 0. A crossfade has no lead, so negating its
     // zero offset leaves a negative zero sitting in the player's state, which
     // is numerically fine and confusing to read in a log.
-    this.seekOffsetSec = -startsAtSec || 0;
+    //
+    // Plus the silence the join skipped: the incoming track began that far
+    // into its own file.
+    this.seekOffsetSec = (toOffsetSec - startsAtSec) || 0;
+    // So a seek on the new track restarts it at its own level.
+    this.gainDb = toGain;
 
     // The incoming track's audio is inside the joined resource, so there is no
     // new file to load - but the analyser still needs a path, and the prefetch
@@ -791,9 +1078,13 @@ export class GuildPlayer {
       // real file at the moment it starts, and this is the only place that
       // knows one is already on disk - the alternative is a download inside the
       // transition, which would stall past the end of the outgoing track.
-      .then((path) => {
+      .then(async (path) => {
         if (!path || this.prefetching !== key) return;
-        this.prefetched = { key, path };
+        // Measured before the track is marked ready, so the join can be spawned
+        // in the same tick it is decided rather than waiting on ffmpeg.
+        const { gain, leadInSec } = await this.levelsFor(next, path);
+        if (this.prefetching !== key) return;
+        this.prefetched = { key, path, gain, leadInSec };
         // The file is on disk well before the track is heard, so the analysis
         // can happen now instead of at the handover - where it left the
         // incoming track playing with no visuals while it ran.
@@ -813,9 +1104,9 @@ export class GuildPlayer {
    */
   async advance(manual) {
     // A skip lands here with a transition possibly already mixing the *next*
-    // track in. `startCurrent` cancels it too, but the queue-end branch below
-    // returns before reaching it.
-    this.cancelTransition();
+    // track in. Retired before the queue moves rather than after a download:
+    // see `retireAudio` for the double advance the other order caused.
+    this.retireAudio();
     let next = this.queue.next(manual);
 
     // A deck running dry while others still hold tracks would leave the room in
@@ -831,6 +1122,9 @@ export class GuildPlayer {
     }
 
     if (!next) {
+      // Stopped outright. Otherwise a skip on the last track left the song
+      // playing and announced the end of the queue again when it finished.
+      this.player.stop(true);
       this.releaseAudio();
       this.score = null;
       this.onQueueEnd?.();
@@ -869,23 +1163,18 @@ export class GuildPlayer {
     // A transition was scheduled against a position this track is no longer at,
     // and an in-flight one is mixing in a track the user has just seeked away
     // from. Both are stale the moment a seek lands.
-    this.cancelTransition();
+    this.retireAudio();
 
-    // ffmpeg decodes from the offset and emits raw PCM; -ss before -i seeks by
-    // container index, which is near-instant.
-    const ffmpeg = spawn('ffmpeg', [
-      '-loglevel', 'error',
-      '-ss', String(target),
-      '-i', this.audioPath,
-      '-f', 's16le', '-ar', '48000', '-ac', '2',
-      'pipe:1',
-    ]);
-    ffmpeg.on('error', (error) => console.error('[seek] ffmpeg:', error.message));
-    // Tracked so the next thing to replace the resource kills it. Scrubbing the
-    // bar spawns one of these per drop, and before this they all kept decoding.
-    this.decoder = ffmpeg;
-
-    const resource = createAudioResource(ffmpeg.stdout, { inputType: StreamType.Raw });
+    // At the track's own loudness gain, through the same limiter as a normal
+    // start. This path was 16-bit PCM before, which is where a hot master's
+    // overs were hard-clipped - the same song clean until someone seeked.
+    // Tracked so the next thing to replace the resource kills it: scrubbing the
+    // bar spawns one of these per drop.
+    this.decoder = spawnDecoder(
+      playbackArgs({ file: this.audioPath, position: target, gain: this.gainDb }),
+      `voice ${this.guildId}`,
+    );
+    const resource = createAudioResource(this.decoder.stdout, { inputType: StreamType.OggOpus });
     this.currentResource = resource;
     this.player.play(resource);
     this.seekOffsetSec = target;
@@ -918,7 +1207,12 @@ export class GuildPlayer {
     if (!Number.isFinite(value) || value < 0) {
       this.smoothTransitions = false;
       this.crossfadeSec = 0;
-      this.cancelTransition();
+      // A join already mixing is left to finish: its handover still has to
+      // happen, or the queue would never move on while the next song plays.
+      // Nothing is killed. This used to kill the decoder, which after any seek
+      // or completed join is the one carrying the song, so switching
+      // transitions off skipped the track.
+      if (!this.transition) this.stopTransitionTimer();
       console.log(`[voice ${this.guildId}] transitions off`);
       return 0;
     }
@@ -972,9 +1266,8 @@ export class GuildPlayer {
 
   /** Stop playback, clear the queue and leave the channel. */
   stop() {
-    this.cancelTransition();
+    this.retireAudio();
     this.prefetched = null;
-    this.currentResource = null;
     this.player.stop(true);
     this.releaseAudio();
     for (const deck of this.decks.decks) deck.queue.clear();
