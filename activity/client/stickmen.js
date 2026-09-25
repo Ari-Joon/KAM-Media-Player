@@ -4470,23 +4470,21 @@ export class StickMenVisual {
     // Elbows and knees, marked so limb articulation is visible.
 
     // Trunk, thicker so the body has mass.
-    bones.push({ a: root, b: chest, w: limbPx * 2.10, part: 'torso' });
+    bones.push({ a: root, b: chest, w: limbPx * 2.10 });
     // Shoulder bar: what gives the figure width across the top.
     bones.push({
       a: add(chest, rotY([shoulderHalf, 0, 0], chestYaw)),
       b: add(chest, rotY([-shoulderHalf, 0, 0], chestYaw)),
       w: limbPx * 1.20,
-      part: 'torso',
     });
     // Hip bar, so legs emerge from a body rather than a point.
     bones.push({
       a: add(root, rotY([shoulderHalf * 0.62, 0, 0], yaw)),
       b: add(root, rotY([-shoulderHalf * 0.62, 0, 0], yaw)),
       w: limbPx * 1.40,
-      part: 'torso',
     });
     // Neck.
-    bones.push({ a: chest, b: head, w: limbPx * 1.05, part: 'torso', neck: true });
+    bones.push({ a: chest, b: head, w: limbPx * 1.05 });
 
     // The hips in the arms' frame, for the torso clearance below.
     const hipsInChest = rotY(sub(root, chest), -chestYaw);
@@ -4520,8 +4518,8 @@ export class StickMenVisual {
       const elbow = add(shoulder, rotY(solved.joint, chestYaw));
       let hand = add(shoulder, rotY(solved.end, chestYaw));
       hand = this.applyLag(dancer.lag.hands, side, hand, deltaSec, 8 * dancer.looseness);
-      bones.push({ a: shoulder, b: elbow, w: limbPx, part: `arm${side}`, attached: 0.35 });
-      bones.push({ a: elbow, b: hand, w: limbPx * 0.95, part: `arm${side}` });
+      bones.push({ a: shoulder, b: elbow, w: limbPx });
+      bones.push({ a: elbow, b: hand, w: limbPx * 0.95 });
     });
 
     const legSpan = thigh + shin;
@@ -4575,28 +4573,17 @@ export class StickMenVisual {
         14 * dancer.looseness + dancer.plant[side].strength * 400,
       );
 
-      bones.push({ a: hip, b: knee, w: limbPx * 1.16, part: `leg${side}`, attached: 0.3 });
-      bones.push({ a: knee, b: foot, w: limbPx * 1.04, part: `leg${side}` });
+      bones.push({ a: hip, b: knee, w: limbPx * 1.16 });
+      bones.push({ a: knee, b: foot, w: limbPx * 1.04 });
     });
 
-    // Drawn part by part - torso, head, each arm, each leg - far to near, each
-    // part's light rim and then its black body before the next part begins.
+    // Drawn twice: a wider light pass, then the black silhouette on top.
     //
-    // The rim is what makes a pose readable: a solid black figure against a
-    // saturated backdrop keeps its outer shape and loses every internal edge.
-    // It used to be one pass of rims for the whole figure and then one pass of
-    // bodies, which kept the outer edge and nothing else - the torso's black,
-    // drawn in the second pass, covered the rim of any arm crossing in front of
-    // it. An arm folded across the chest vanished into one mass, two dancers
-    // overlapping read as a single blob, and a raised hand merged into the head
-    // it was in front of. The comment here claimed the rim restored those edges;
-    // the order of the passes meant it never did.
-    //
-    // Nearest last, so a limb in front of the body lays its rim over it, and a
-    // hand behind the back is cut off by the torso's rim instead - which is what
-    // tells the eye which is in front. Compared on the same paused frames in the
-    // preview harness, six dancers: arms across chests and legs against legs read
-    // as separate limbs where the single pass showed one black shape.
+    // The outline is what makes a pose readable. A solid black figure against a
+    // saturated backdrop loses its internal edges entirely - an arm crossing the
+    // torso simply disappears into it - so the silhouette shows the outer shape
+    // and nothing of what the limbs are doing. A light rim restores those edges
+    // without turning the figure into line art.
     context.lineCap = 'round';
     context.lineJoin = 'round';
 
@@ -4606,9 +4593,7 @@ export class StickMenVisual {
       const pa = this.project(bone.a, width, height);
       const pb = this.project(bone.b, width, height);
       if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
-      projected.push({
-        pa, pb, w: bone.w, part: bone.part, attached: bone.attached ?? 0, neck: bone.neck === true,
-      });
+      projected.push({ pa, pb, w: bone.w });
     }
     const pHead = this.project(head, width, height);
 
@@ -4616,62 +4601,24 @@ export class StickMenVisual {
     // every pose look like the same rounded blob.
     const outlinePx = Math.max(1, limbPx * 0.15);
 
-    const parts = new Map();
-    const partOf = (key) => {
-      const part = parts.get(key) ?? { bones: [], depth: 0, points: 0, head: null };
-      parts.set(key, part);
-      return part;
-    };
-    for (const bone of projected) {
-      const part = partOf(bone.part);
-      part.bones.push(bone);
-      part.depth += bone.pa.depth + bone.pb.depth;
-      part.points += 2;
-    }
-    if (Number.isFinite(pHead.x)) {
-      const part = partOf('head');
-      part.head = pHead;
-      part.depth += pHead.depth;
-      part.points += 1;
-    }
-    const neck = projected.find((bone) => bone.neck);
-    const order = [...parts.values()]
-      .sort((a, b) => b.depth / b.points - a.depth / a.points);
+    for (const pass of ['outline', 'body']) {
+      const isOutline = pass === 'outline';
+      // A soft near-white rather than pure white, which would read as a glow.
+      context.strokeStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
+      context.fillStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
 
-    for (const part of order) {
-      for (const isOutline of [true, false]) {
-        // A soft near-white rather than pure white, which would read as a glow.
-        context.strokeStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
-        context.fillStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
-        for (const bone of part.bones) {
-          context.lineWidth = bone.w + (isOutline ? outlinePx * 2 : 0);
-          // The rim of a limb's first bone starts clear of the body. Drawn from
-          // the joint, it cut a white seam across the shoulder or hip, where the
-          // limb is not crossing anything - it is attached.
-          const from = isOutline ? bone.attached : 0;
-          context.beginPath();
-          context.moveTo(
-            bone.pa.x + (bone.pb.x - bone.pa.x) * from,
-            bone.pa.y + (bone.pb.y - bone.pa.y) * from,
-          );
-          context.lineTo(bone.pb.x, bone.pb.y);
-          context.stroke();
-        }
-        if (part.head) {
-          context.beginPath();
-          context.arc(part.head.x, part.head.y, headPx + (isOutline ? outlinePx : 0), 0, Math.PI * 2);
-          context.fill();
-          // The neck laid back over the head's rim, so the head does not read as
-          // a ball sitting on the body with a white line under its chin.
-          if (isOutline && neck) {
-            context.strokeStyle = '#000';
-            context.lineWidth = neck.w;
-            context.beginPath();
-            context.moveTo(neck.pa.x, neck.pa.y);
-            context.lineTo(neck.pb.x, neck.pb.y);
-            context.stroke();
-          }
-        }
+      for (const bone of projected) {
+        context.lineWidth = bone.w + (isOutline ? outlinePx * 2 : 0);
+        context.beginPath();
+        context.moveTo(bone.pa.x, bone.pa.y);
+        context.lineTo(bone.pb.x, bone.pb.y);
+        context.stroke();
+      }
+
+      if (Number.isFinite(pHead.x)) {
+        context.beginPath();
+        context.arc(pHead.x, pHead.y, headPx + (isOutline ? outlinePx : 0), 0, Math.PI * 2);
+        context.fill();
       }
     }
   }
