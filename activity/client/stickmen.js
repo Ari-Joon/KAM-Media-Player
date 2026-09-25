@@ -60,28 +60,38 @@ function mixHex(fromHex, toHex, t) {
 const DEG = Math.PI / 180;
 
 /**
- * Smallest angle a limb may sit from the torso, in radians.
+ * Smallest angle a limb may sit from the torso, in radians, before it is eased
+ * back out - after a few seconds' grace; see `repel`.
  *
  * Below this a limb visually merges with the body and the figure stops reading
  * as posed at all - it becomes a stick with a head.
  *
- * Arms sit at 41 degrees, a fifth wider than the 34 they held before. The floor
- * is what a pose is pushed *out to*, so raising it does not open the arms of a
- * figure that was already reaching; it narrows the band of poses that end up
- * against the body at all, which is exactly "less likely to have his arms at
- * his side". Legs are left alone: they carry the weight, and a stance forced
- * wider reads as a limp rather than as dancing.
+ * Lift has been a plain angle out from the body since `poseAim`, so these are
+ * too. An arm held 20 degrees out puts the hand 0.4 of a build from the body's
+ * axis, clear of the trunk's drawn edge. They were 41 and 15 when lift was
+ * multiplied 2.625 times into a turn about the vertical, where 41 already sat
+ * past the side: taken literally now, 15 degrees on each leg would splay every
+ * stance to three quarters of a build.
  */
-const MIN_ARM_SPREAD = 41 * (Math.PI / 180);
-const MIN_LEG_SPREAD = 15 * (Math.PI / 180);
+const MIN_ARM_SPREAD = 20 * (Math.PI / 180);
+const MIN_LEG_SPREAD = 4 * (Math.PI / 180);
+
+/**
+ * Which way a figure faces before it turns: towards the audience.
+ *
+ * Every camera but the side-on one stands on the -z side of the stage, and the
+ * figures faced +z, away from all of them. With no face drawn that could not
+ * be seen directly, but everything that shows which way a body faces went the
+ * wrong way: arms reached away from the viewer, knees bent away from them, and
+ * a performance meant for the room was danced to the back wall.
+ */
+const FACING_AUDIENCE = Math.PI;
 
 /**
  * Body proportions, as fractions of a figure's build.
  *
- * `drawDancer` had these as locals. They are module constants now because the
- * head clearance has to know where a hand ends up relative to the head, and a
- * second copy of the numbers would drift silently: the clearance would go on
- * defending a head that had moved.
+ * Module constants rather than locals in `drawDancer`, so anything that needs
+ * the body's geometry reads the same numbers the figure is drawn with.
  */
 const SHOULDER_HALF = 0.20;
 const UPPER_ARM = 0.36;
@@ -97,168 +107,21 @@ const SPINE_LEN = 0.52;
  */
 const BODY_HEIGHT = THIGH + SHIN + SPINE_LEN + 0.42;
 
-/**
- * The head, in the same units.
- *
- * `drawDancer` sizes the head circle at a tenth of the figure's projected
- * height and places its centre one and a half radii above the chest, so both
- * fall out of {@link BODY_HEIGHT} directly. The shoulder sits level with the
- * chest, so the head is `HEAD_RISE` above a shoulder and `SHOULDER_HALF`
- * inward of it.
- */
-const HEAD_RADIUS = BODY_HEIGHT * 0.100;
-const HEAD_RISE = HEAD_RADIUS * 1.5;
-
-/**
- * Lift, as the pose tables author it, becomes an aim azimuth this much larger.
- *
- * `drawDancer` scales lift by 1.75 on the way in and `fromLegacy` by a further
- * 1.5. It matters here because it means lift runs a long way past "out to the
- * side" - a lift of 34.3 degrees is already a full 90 - and then wraps back
- * across the body.
- */
-const ARM_LIFT_TO_AZIMUTH = 1.75 * 1.5;
-
-/**
- * How far a hand must stay from the head, in body heights.
- *
- * A hand's stroke half-width is 0.052 and the head's radius is 0.204, so they
- * touch at 0.26. This is comfortably past that, because the ask was hands that
- * *sit beside* the head, not only hands that overlap it.
- *
- * Raised from 0.45 on 23 August 2026. 0.45 met the brief as it was measured -
- * a 15% reduction in hands *beside* the head - and the result still looked
- * wrong, because the eye does not register "beside". It registers the hand
- * merging into the head circle, and 0.45 removed only a third of those.
- *
- * Swept over a six-figure cast for 60 seconds at 60fps, 43,200 hand-frames per
- * row, counting hands level with the head and within its radius:
- *
- * | clearance | beside | merged into the head |
- * |-----------|--------|----------------------|
- * | disabled  | 14.11% | 2.225%               |
- * | 0.45      | 12.44% | 1.481%               |
- * | 0.60      | 10.63% | 0.845%               |
- * | 0.75      |  8.36% | 0.345%               |
- * | 0.90      |  7.22% | 0.231%               |
- *
- * 0.75 cuts merging 4.3x against 0.45 while leaving 8.36% of hands passing
- * beside the head, so the arm still travels there and is pushed off rather
- * than being forbidden. 0.90 buys 0.11 points more and starts flattening
- * raised-arm poses, which is the failure mode this must not become.
- */
-const HEAD_CLEARANCE = 0.75;
-
-/**
- * How far to open the elbow per body height of shortfall, in radians.
- *
- * ## Why the elbow, and not the lift the torso clearance uses
- *
- * Horizontal separation from the head works out as
- * `sqrt(SHOULDER_HALF^2 + 2 SHOULDER_HALF R sin(azimuth) + R^2)`, where `R` is
- * how far out the hand reaches. That has exactly one maximum in azimuth, at +90
- * degrees - and the torso clearance already parks arms past it, at a lift of 41
- * degrees against the 34.3 that makes 90. So there is almost nowhere useful
- * left to push in lift, and pushing hard enough to matter wraps the azimuth
- * round and brings the hand back the other side. Measured: repelling lift away
- * from the head's azimuth took 14.05% of hand-frames to 13.87%, a 1.3%
- * reduction where 15% was asked for, and it saturated.
- *
- * `R` is the other term, and it is the arm's reach. Straightening the elbow
- * moves the hand away where turning it cannot - which is also what a person
- * does, since you extend your arm to get your hand clear rather than swinging
- * it round your own head.
- *
- * ## The number
- *
- * Tuned by measurement over 180 seconds of a six-figure cast at 60fps, 129,600
- * hand-frames: count the frames where a hand is level with the head (within a
- * head radius of its height) *and* horizontally inside {@link HEAD_CLEARANCE}.
- * Level-with is part of the test on purpose - plain distance to the head centre
- * is dominated by arms held straight overhead, where the hand is near the
- * centre but clearly above the crown, which is a pose worth keeping.
- *
- * 14.04% before, 11.93% after: a 15.0% reduction. The curve is still steep
- * there - 70 gives 12.44% and 105 gives 11.76% - so this is a tuned value and
- * not a plateau. It keeps climbing (9.66% at 600), which is the argument for
- * stopping at the number that was asked for rather than at the strongest one.
- *
- * Re-measure if the arm bone lengths, `MIN_ARM_SPREAD` or `LIMITS.elbow`
- * change; all three move where the hand ends up.
- */
-const HEAD_ELBOW_GAIN = 95 * (Math.PI / 180);
-
-/**
- * Where a hand sits relative to the head, from pose angles alone.
- *
- * Inverts what `drawDancer` and {@link limb} do between them, without the
- * camera or the world transform: both the hand and the head hang off the chest
- * and are yawed by it together, so their separation is the same in body-local
- * coordinates as it is in the world.
- *
- * @param {{swing: number, lift: number, elbow: number}} arm
- * @returns {{horizontal: number, level: number}} Distance from the head's
- *   vertical axis in body heights, and 1 when the hand shares the head's height
- *   band, falling to 0 a head radius outside it.
- */
-function handVersusHead(arm) {
-  // `fromLegacy` reads swing as an elevation measured up from straight down,
-  // and maps a fold inversely onto reach.
-  const elevation = -Math.PI / 2 - arm.swing;
-  const azimuth = arm.lift * ARM_LIFT_TO_AZIMUTH;
-  const extend = Math.max(0.42, Math.min(1, 1 - Math.abs(arm.elbow) / (Math.PI * 0.9)));
-  const reach = (UPPER_ARM + FORE_ARM)
-    * (MIN_REACH + (MAX_REACH - MIN_REACH) * extend);
-
-  const radius = reach * Math.cos(elevation);
-  // The shoulder is SHOULDER_HALF outward of the head's axis, so the hand's
-  // offset from that axis is the shoulder's plus the arm's.
-  const across = SHOULDER_HALF + radius * Math.sin(azimuth);
-  const fore = radius * Math.cos(azimuth);
-
-  const gap = Math.abs(reach * Math.sin(elevation) - HEAD_RISE);
-  return {
-    horizontal: Math.hypot(across, fore),
-    // Faded rather than switched, for the reason `anticipate` is shaped: this
-    // scales a force that feeds a spring, and a term that appears between one
-    // frame and the next steps that spring into a visible twitch.
-    level: 1 - Math.min(1, Math.max(0, (gap - HEAD_RADIUS) / HEAD_RADIUS)),
-  };
-}
-
-/**
- * Push a hand away from the head by straightening the arm.
- *
- * The same repulsion as the torso clearance - {@link repel} unchanged, with its
- * deficit-fraction force and its grace timer - only measured on a real distance
- * rather than on an angle, and paid out in elbow rather than in lift. See
- * {@link HEAD_ELBOW_GAIN} for why lift is the wrong currency here.
- *
- * @param {{swing: number, lift: number, elbow: number}} target The pose being
- *   aimed at this frame.
- * @param {{swing: number, lift: number, elbow: number}} visible The pose
- *   currently drawn, which is what the timer must judge.
- * @param {{tuckSec: number}} state Per-arm timer, mutated. Call once per frame.
- * @param {number} deltaSec
- * @returns {number} Radians to subtract from the elbow; a smaller fold is a
- *   longer reach.
- */
-function clearHead(target, visible, state, deltaSec) {
-  const aimed = handVersusHead(target);
-  const drawn = handVersusHead(visible);
-  // Scaling the *minimum* by how level the hand is means the clearance fades in
-  // and out with the pose while `repel` itself stays untouched - and outside the
-  // head's height band the minimum is zero, which it passes straight through.
-  const pushed = repel(
-    aimed.horizontal, drawn.horizontal, HEAD_CLEARANCE * aimed.level,
-    state, deltaSec, MAX_HEAD_TUCK_SEC,
-  );
-  // `repel` never pushes a positive value downward, so this cannot fold an arm.
-  return (pushed - aimed.horizontal) * HEAD_ELBOW_GAIN;
-}
-
 /** Longest a limb may stay tucked against the body, in seconds. */
 const MAX_TUCK_SEC = 3;
+
+/** Height of the floor the feet stand on: the lowest a foot may be drawn. */
+const FLOOR = 0;
+
+/**
+ * How far the drawn pose trails the pose a move asks for, in seconds.
+ *
+ * Measured at 120bpm by comparing the springs' output with their target: 33ms
+ * for the arms, 50ms for the legs and hips. `updatePosition` reads the moves
+ * this far ahead of the music to cancel it, so a clap written to close on the
+ * beat is drawn closing on it.
+ */
+const SPRING_LAG_SEC = 0.04;
 
 /**
  * Nearest a hand or elbow may come to the torso's axis, as a fraction of build.
@@ -287,6 +150,11 @@ const MAX_TUCK_SEC = 3;
  * 0.31 is the two surfaces nearly touching, and it costs the poses 0.015 of
  * median hand distance: arms that were already clear are left where they were.
  * Hands merged into the head fell from 0.34% to 0.20% as a side effect.
+ *
+ * Measured again once `poseAim` and the rewritten tables stopped folding arms
+ * across the chest by accident: the arms crossed on purpose - a floss, a clap
+ * closing, the singer's mic hand - put a forearm through the body on 2.81% of
+ * hand-frames without the clearance, and on 0.00% with it.
  */
 const HAND_TORSO_CLEARANCE = 0.31;
 
@@ -316,6 +184,11 @@ const HAND_TORSO_CLEARANCE = 0.31;
  * widened the median stance by half, which is the limp `MIN_LEG_SPREAD`'s
  * narrow floor exists to avoid. At 0.19 the median moves 13%, and what moves
  * is the feet that were standing on each other.
+ *
+ * Since `poseAim` made leg lift spread a stance as the tables always meant
+ * it to, legs rarely come near each other: shins crossed on 0.19% of
+ * dancer-frames without the gap and 0.00% with it, and the median stance is
+ * 0.441 either way.
  */
 const MIN_LIMB_GAP = 0.19;
 
@@ -405,7 +278,7 @@ function segmentGap(p1, q1, p2, q2) {
  *
  * @returns {{joint: number[], end: number[]}} The arm, in the shoulder's frame.
  */
-function clearArm(solved, shoulder, hips, radius, upper, lower) {
+function clearArm(solved, shoulder, hips, radius, upper, lower, flare = null) {
   let arm = solved;
   for (let pass = 0; pass < 3; pass++) {
     const hand = add(shoulder, arm.end);
@@ -416,25 +289,10 @@ function clearArm(solved, shoulder, hips, radius, upper, lower) {
     let target = handOut ?? hand;
     if (elbowOut) target = add(target, sub(elbowOut, elbow));
     const reach = aimAt(sub(target, shoulder), upper + lower);
-    arm = limb(reach.elevation, reach.azimuth, reach.extend, upper, lower, -1);
+    arm = limb(reach.elevation, reach.azimuth, reach.extend, upper, lower, -1, flare);
   }
   return arm;
 }
-
-/**
- * Longest a hand may linger by the head, in seconds.
- *
- * Far shorter than {@link MAX_TUCK_SEC}, and it has to be. The torso is
- * something a limb rests *against*, so a three-second allowance costs nothing
- * and buys a deliberate fold. The head is something a hand passes *through* on
- * the way up and back, so an arm is only ever in the head's band for a fraction
- * of a second at a time - and while the allowance is unspent the repulsion runs
- * at 6% of the deficit, which measured as no change at all: 20.95% of hand
- * frames beside the head before, 20.95% after. The clearance simply never fired.
- *
- * A third of a second still lets a hand strike the face on a beat and leave.
- */
-const MAX_HEAD_TUCK_SEC = 0.33;
 
 /**
  * Push a limb away from the torso.
@@ -502,24 +360,6 @@ function repel(target, visible, minimum, state, deltaSec, grace = MAX_TUCK_SEC) 
 }
 
 /**
- * Neutral stance, used as the origin for exaggerating movement.
- *
- * Amplification scales the distance from these values rather than from zero, so
- * a deliberately held pose stays where it was written and only the moving part
- * of a gesture is pushed further. Scaling absolute angles instead turned an arm
- * held at -128 degrees into -256, wrapping it around the body - which is why
- * limbs kept ending up behind the head.
- */
-const REST = {
-  armSwing: -18 * DEG,
-  armLift: 14 * DEG,
-  elbow: 28 * DEG,
-  legSwing: 10 * DEG,
-  legLift: 8 * DEG,
-  knee: 14 * DEG,
-};
-
-/**
  * Joint limits, in radians.
  *
  * Amplification can push a pose that was already extreme past anything a body
@@ -528,13 +368,12 @@ const REST = {
  * letting it become anatomically impossible.
  */
 const LIMITS = {
-  armSwing: [-170 * DEG, 45 * DEG],
-  // Ceiling lowered a tenth, from 105 degrees to 94: past vertical an arm
-  // reads as flailing above the head rather than as reaching, and the pose
-  // loses its line. The floor is untouched - an arm swinging low across the
-  // body is a real gesture, and the spread limit already keeps it off the
-  // torso.
-  armLift: [-105 * DEG, 94 * DEG],
+  // Straight overhead is -180; a little past it takes the hands behind the head.
+  armSwing: [-190 * DEG, 60 * DEG],
+  // Out to the side is 90, and 125 raises a side-held arm 35 degrees above
+  // level. Crossing over by more than 60 would take the arm through the far
+  // shoulder.
+  armLift: [-60 * DEG, 125 * DEG],
   // Capped well below a full fold. Past about 110 degrees the forearm is
   // travelling back toward the shoulder rather than doing anything visible, and
   // the figure reads as having its arms clamped to its sides.
@@ -544,9 +383,9 @@ const LIMITS = {
   knee: [0, 135 * DEG],
   spine: [-40 * DEG, 45 * DEG],
   head: [-45 * DEG, 45 * DEG],
-  // In body heights. Negative is upward; a quarter of a body height is a
-  // vigorous hop and anything beyond it stops reading as a person.
-  bob: [-0.26, 0.16],
+  // Hip travel in world units, positive upward: a jump's hop above standing,
+  // a deep crouch below it.
+  bob: [-0.26, 0.30],
 };
 
 /** Constrain a value to a limit pair. */
@@ -590,6 +429,26 @@ function softClamp(value, [low, high], knee = 0.65) {
   const sign = offset < 0 ? -1 : 1;
   const beyond = (magnitude - knee) / (1 - knee);
   return mid + sign * (knee + (1 - knee) * Math.tanh(beyond)) * half;
+}
+
+/**
+ * The equivalent of an angle nearest another, a whole number of turns away.
+ *
+ * `spin` writes its turn as a ramp from 0 to 360 degrees across each bar, and
+ * the body's spring chases whatever it is given - so at every bar line the
+ * target fell a whole turn and the figure whipped back round through it.
+ * Measured over sixteen seconds of `spin`, the figure turned backwards on 19%
+ * of frames, by up to 30 degrees in one. Taking the equivalent of the target
+ * nearest the angle already drawn makes the ramp continuous: no backward
+ * frames since.
+ *
+ * @param {number} angle The turn a move asks for, in radians.
+ * @param {number} from The turn currently drawn.
+ * @returns {number}
+ */
+function nearestTurn(angle, from) {
+  const turn = Math.PI * 2;
+  return angle + turn * Math.round((from - angle) / turn);
 }
 
 /**
@@ -756,11 +615,11 @@ function spring(state, target, stiffness, damping, deltaSec) {
  * The key must stay unique per side, which is what the `a0`/`a1` prefix is for -
  * both arms drive a field called `swing`.
  */
-const ARM_FIELDS = ['swing', 'lift', 'elbow'];
+const ARM_FIELDS = ['swing', 'lift', 'elbow', 'flare'];
 const LEG_FIELDS = ['swing', 'lift', 'knee'];
 const ARM_KEYS = [
-  ['a0swing', 'a0lift', 'a0elbow'],
-  ['a1swing', 'a1lift', 'a1elbow'],
+  ['a0swing', 'a0lift', 'a0elbow', 'a0flare'],
+  ['a1swing', 'a1lift', 'a1elbow', 'a1flare'],
 ];
 const LEG_KEYS = [
   ['l0swing', 'l0lift', 'l0knee'],
@@ -770,10 +629,31 @@ const LEG_KEYS = [
 /**
  * Ease every numeric field of a pose toward a target pose.
  *
- * Doing this to the *whole* pose rather than only to limb tips gives two things
- * at once: no value can ever step, and a change of move blends over about a
- * second instead of snapping. Nothing else in the renderer needs to know that
- * moves are being cross-faded.
+ * Doing this to the *whole* pose rather than only to limb tips means no value
+ * can ever step, and nothing else in the renderer needs to know that moves are
+ * being blended.
+ *
+ * ## How tight
+ *
+ * Tight enough to dance on the beat. These springs were set loose enough to
+ * cross-fade a move change over about a second, and that same looseness is a
+ * low-pass filter on the dance itself: the arms sat at stiffness 16, a natural
+ * frequency of 0.64Hz, against a beat at 2Hz. Measured at 120bpm by driving
+ * `updatePosition` with a stepped clock and comparing the drawn pose with the
+ * target it chased, the figures showed 10-58% of the range each move asks for,
+ * 250-650ms late - a clap closed to a tenth of its travel, a march lifted its
+ * knees to a third of their height, and nothing landed on the beat it was
+ * written for. The old amplification, up to 2.4 times, was making up the size
+ * and dragging held poses out of place to do it.
+ *
+ * Now the arms have a natural frequency of 4.8Hz and the rest near 4Hz,
+ * damped just under critical so a thrown gesture still overshoots a little.
+ * Measured the same way, the limbs now reach 86-100% of each range, 33-50ms
+ * behind it, and `SPRING_LAG_SEC` reads the moves that far ahead to cancel
+ * the delay. The hips are critically damped, so a dip never rebounds upward,
+ * and round the sharpest bounce down to about 60%. A move change is still
+ * smoothed, over about a fifth of a second, and the connecting move at each
+ * phrase carries the rest.
  *
  * @param {object} current Mutated in place.
  * @param {object} target
@@ -792,36 +672,34 @@ function easePose(current, target, rate, deltaSec) {
     return state;
   };
 
-  // The body carries more mass than the limbs, so it is stiffer and settles
-  // sooner; hands and feet are looser and trail further.
   const drive = (owner, springKey, targetValue, stiffness, damping, field = springKey) => {
     const state = get(springKey, owner[field] ?? 0);
     spring(state, targetValue, stiffness * rate, damping, deltaSec);
     owner[field] = state.value;
   };
 
-  // The old body rig was over-damped and too slow for a 120 BPM target. This
-  // stronger rig lands weight shifts on-beat while limbs keep their looseness.
-  drive(current, 'bob', target.bob, 90, 15);
-  drive(current, 'sway', target.sway, 82, 14);
-  drive(current, 'turn', target.turn, 72, 13);
-  drive(current, 'spineBend', target.spineBend, 82, 14);
-  drive(current, 'spineTwist', target.spineTwist, 72, 13);
+  // Critically damped: hips that overshoot a dip bounce back up past where
+  // they started, which the preparation before a beat must never do.
+  drive(current, 'bob', target.bob, 600, 49);
+  drive(current, 'sway', target.sway, 500, 34);
+  drive(current, 'turn', target.turn, 400, 30);
+  drive(current, 'spineBend', target.spineBend, 500, 34);
+  drive(current, 'spineTwist', target.spineTwist, 500, 34);
+  // Travel is a speed, not a position; it can afford to be smooth.
   drive(current, 'travel', target.travel, 95, 17);
-  drive(current.head, 'swing', target.head.swing, 78, 13);
-  drive(current.head, 'lift', target.head.lift, 78, 13);
+  drive(current.head, 'swing', target.head.swing, 600, 34);
+  drive(current.head, 'lift', target.head.lift, 600, 34);
 
   // Indexed rather than for-of: this runs once per figure per frame, and
   // iterating with destructuring would put the allocations straight back.
   for (let side = 0; side < 2; side++) {
-    // Arms are the loosest: low damping gives the whip and follow-through that
-    // makes a gesture look thrown rather than placed.
+    // Arms are the loosest, damped least, so a thrown gesture follows through.
     const arm = current.arms[side];
     const armTarget = target.arms[side];
     const armKeys = ARM_KEYS[side];
     for (let i = 0; i < ARM_FIELDS.length; i++) {
       const field = ARM_FIELDS[i];
-      drive(arm, armKeys[i], armTarget[field], 16, 8.5, field);
+      drive(arm, armKeys[i], armTarget[field], 900, 39, field);
     }
 
     const leg = current.legs[side];
@@ -829,7 +707,7 @@ function easePose(current, target, rate, deltaSec) {
     const legKeys = LEG_KEYS[side];
     for (let i = 0; i < LEG_FIELDS.length; i++) {
       const field = LEG_FIELDS[i];
-      drive(leg, legKeys[i], legTarget[field], 22, 11, field);
+      drive(leg, legKeys[i], legTarget[field], 700, 40, field);
     }
   }
 }
@@ -840,8 +718,8 @@ function restPose() {
     bob: 0, sway: 0, turn: 0, spineBend: 0, spineTwist: 0, travel: 0,
     head: { swing: 0, lift: 0 },
     arms: [
-      { swing: 0, lift: 0, elbow: 0 },
-      { swing: 0, lift: 0, elbow: 0 },
+      { swing: 0, lift: 0, elbow: 0, flare: 0 },
+      { swing: 0, lift: 0, elbow: 0, flare: 0 },
     ],
     legs: [
       { swing: 0, lift: 0, knee: 0 },
@@ -851,26 +729,41 @@ function restPose() {
 }
 
 /**
- * Convert a legacy swing/lift/bend triple into aim coordinates.
+ * Aim a limb from the angles the pose tables are written in.
  *
- * The pose tables were written against the old sequential-rotation model and
- * express intent perfectly well: swing is how far the limb has travelled from
- * hanging down, lift is how far out from the body, bend is how folded it is.
- * Only the *composition* was broken. Reading them as spherical coordinates keeps
- * every authored pose and fixes the coupling in one place, rather than rewriting
- * forty tables by hand and inevitably changing their character.
+ * `forward` swings the limb forward and up from hanging straight down: a
+ * quarter turn is level in front, a half turn straight overhead. `outward` then
+ * opens it away from the body's midline, towards the figure's own +x, in the
+ * plane across the body - so it means "out to the side" at every swing, level
+ * or overhead. Callers sign it by side, so a table writes the same positive
+ * number to open either arm, and a negative one to cross it over.
  *
- * @param {number} swing Radians from straight down, negative being forward-up.
- * @param {number} lift Radians away from the body.
+ * ## What this replaced
+ *
+ * A conversion that read lift as a turn about the vertical, scaled by 2.625
+ * between it and `drawDancer`. It failed three ways, each found by drawing a
+ * crafted pose through `drawDancer` and reading back the joints:
+ *
+ * - A limb hanging near vertical has almost no horizontal extent to turn, so
+ *   lift barely moved it. Every table spreads the legs with lift, and a leg
+ *   lift of 10 degrees moved the foot 0.06 of a build: the stances never opened.
+ * - Where it did act, 2.625 carried it past the side and round the back: the 48
+ *   degrees a clap opens by became 126, behind the body.
+ * - Leg swing ran backwards. The tables write a forward kick as a positive
+ *   swing - `march` lifts its knees with one, `charleston` flicks its heels with
+ *   a negative - and the conversion sent positive swing behind the body, so the
+ *   march raised its knees behind it and the Charleston kicked forward.
+ *
+ * @param {number} forward Radians forward and up from hanging.
+ * @param {number} outward Radians away from the midline, towards +x.
  * @param {number} bendAngle Radians of joint fold.
  * @returns {{elevation: number, azimuth: number, extend: number}}
  */
-function fromLegacy(swing, lift, bendAngle) {
-  // Straight down is -PI/2 elevation; swing rotates up from there.
-  const elevation = -Math.PI / 2 - swing;
-  // Lift is amplified because it now genuinely reaches sideways at every
-  // elevation, where before it was mostly cancelled out.
-  const azimuth = lift * 1.5;
+function poseAim(forward, outward, bendAngle) {
+  const across = Math.sin(outward);
+  const inPlane = Math.cos(outward);
+  const down = -inPlane * Math.cos(forward);
+  const ahead = inPlane * Math.sin(forward);
   // A larger fold means a shorter reach - but never a reach of nothing.
   //
   // The floor is the fix for arms tucking into the body. A bend of 135 degrees
@@ -879,7 +772,11 @@ function fromLegacy(swing, lift, bendAngle) {
   // of that, and a dancer's almost never reach it. Holding a minimum of 0.42
   // keeps the forearm out where it can be seen at every pose.
   const extend = Math.max(0.42, Math.min(1, 1 - Math.abs(bendAngle) / (Math.PI * 0.9)));
-  return { elevation, azimuth, extend };
+  return {
+    elevation: Math.asin(Math.max(-1, Math.min(1, down))),
+    azimuth: Math.atan2(across, ahead),
+    extend,
+  };
 }
 
 /**
@@ -912,9 +809,11 @@ function fromLegacy(swing, lift, bendAngle) {
  * @param {number} upper Length of the first bone.
  * @param {number} lower Length of the second.
  * @param {number} [bend] Which way the joint breaks, +1 or -1.
+ * @param {number[]|null} [flare] Swing the joint out towards this direction
+ *   instead, by the vector's length, 0-1. See `flare` in {@link MOVES}.
  * @returns {{joint: number[], end: number[]}} Offsets from the parent joint.
  */
-function limb(elevation, azimuth, extend, upper, lower, bend = 1) {
+function limb(elevation, azimuth, extend, upper, lower, bend = 1, flare = null) {
   const span = upper + lower;
   // Never fully straight and never folded flat: both extremes look broken.
   // Expressed through the shared constants because `aimAt` inverts this exact
@@ -957,13 +856,39 @@ function limb(elevation, azimuth, extend, upper, lower, bend = 1) {
   // Still degenerate only if direction is parallel to the blended reference,
   // which the blend makes impossible in practice; guarded regardless.
   if (Math.hypot(side[0], side[1], side[2]) < 1e-4) side = [1, 0, 0];
-  const perpendicular = unit(cross(unit(side), direction));
+  let perpendicular = unit(cross(unit(side), direction));
+  let breaks = bend;
+
+  // Flared: the joint swings towards the given side instead, by as much as
+  // asked. An elbow otherwise always breaks back or down, which cannot draw
+  // hands on hips or behind the head - the elbows go out for both. Only the
+  // part of the flare across the limb counts, so an arm pointing straight
+  // along it (level out to the side) keeps its ordinary bend rather than
+  // snapping round.
+  if (flare) {
+    const amount = Math.min(1, Math.hypot(flare[0], flare[1], flare[2]));
+    const along = dot3(flare, direction);
+    const across = [
+      flare[0] - direction[0] * along,
+      flare[1] - direction[1] * along,
+      flare[2] - direction[2] * along,
+    ];
+    const blended = [
+      perpendicular[0] * bend * (1 - amount) + across[0],
+      perpendicular[1] * bend * (1 - amount) + across[1],
+      perpendicular[2] * bend * (1 - amount) + across[2],
+    ];
+    if (Math.hypot(blended[0], blended[1], blended[2]) > 1e-3) {
+      perpendicular = unit(blended);
+      breaks = 1;
+    }
+  }
 
   return {
     joint: [
-      direction[0] * along + perpendicular[0] * out * bend,
-      direction[1] * along + perpendicular[1] * out * bend,
-      direction[2] * along + perpendicular[2] * out * bend,
+      direction[0] * along + perpendicular[0] * out * breaks,
+      direction[1] * along + perpendicular[1] * out * breaks,
+      direction[2] * along + perpendicular[2] * out * breaks,
     ],
     end,
   };
@@ -1076,15 +1001,22 @@ function attack(phase) {
  * beat, making it a second follow-through rather than a preparation. The bob
  * spring's lag is therefore about 0.13 of a beat.
  *
- * Centring the input at 0.72 puts the drawn dip at phase 0.92, just before the
- * accent, and adds 0.0096 of hip travel - 27% on top of the existing beat
- * bounce, so it reads without taking the movement over.
+ * Centred at 0.72, that put the drawn dip at phase 0.92. The springs have
+ * since been tightened and the moves are read 40ms ahead of the music (see
+ * `SPRING_LAG_SEC`), which left 0.72 drawing the dip at 0.71 - nearer the
+ * middle of the beat than the accent - and three times deeper than intended,
+ * because the springs no longer swallowed it.
+ *
+ * Centred at 0.86 and narrowed to fit before the beat, the deepest drawn point
+ * falls between 0.83 and 0.88 of the beat, measured in 24ths, and at 0.03 of
+ * depth per unit of preparation it adds 0.0119 of hip travel: 25% of the beat
+ * bounce, which reads without taking the movement over.
  *
  * Retune both if the body spring's stiffness changes: they compensate for it,
  * they do not describe the music.
  */
-const ANTICIPATION_CENTRE = 0.72;
-const ANTICIPATION_WIDTH = 0.36;
+const ANTICIPATION_CENTRE = 0.86;
+const ANTICIPATION_WIDTH = 0.26;
 
 /**
  * Smooth preparation pulse within a beat.
@@ -1109,922 +1041,922 @@ function anticipate(phase) {
 /**
  * Poses, as pure functions of `(bar, beat, energy, punch)`.
  *
- * Each returns joint angles on multiple axes. `swing` is forward/back, `lift` is
- * out to the side; both together give the diagonal movement that stiff
- * single-axis animation lacks.
+ * Each returns joint angles in degrees-times-`DEG`, and they are drawn as
+ * written: the dynamics in `updatePosition` make a move bigger or smaller about
+ * its own centre, so the numbers here are where each gesture happens. Every
+ * table was rewritten on 25 September 2026, when the conversion that draws
+ * them was found to have been reversing the legs and folding the arms round
+ * behind the body; see `poseAim`.
  *
- * `bob` raises the hips, `sway` shifts them sideways, `turn` yaws the whole body
- * and `travel` moves it across the floor.
+ * ## Conventions
+ *
+ * - Arm `swing`: 0 hangs straight down, -90 is level in front, -180 straight
+ *   overhead; positive swings behind the body.
+ * - Leg `swing`: the other way round, because every table was written so -
+ *   positive lifts the leg forward, negative takes it behind.
+ * - `lift`: opens a limb away from the body in the plane across it, on either
+ *   side. 90 is straight out to the side at any swing; negative crosses over.
+ *   Write the same number for both arms to open them symmetrically.
+ * - `elbow` and `knee`: 0 straight. An elbow breaks backward and down, a knee
+ *   forward; `flare`, 0-1, swings an elbow out to the side instead, which is
+ *   what hands on hips and hands behind the head need.
+ * - `bob` raises the hips (negative sinks them), `sway` shifts them sideways,
+ *   `turn` yaws the body, `spineBend` leans the chest forward, `spineTwist`
+ *   turns the shoulders against the hips, and `head.swing` nods it forward.
+ * - `travel` moves the figure across the floor.
+ *
+ * Every move has one defining mechanic, and that is what it is written around:
+ * the Twist is hips against shoulders, the Charleston heels flicking back, the
+ * Running Man a foot sliding under a lifted knee. Get the mechanic and a dance
+ * reads even on a stick figure; get only the energy and none of them do.
  */
 const MOVES = {
-  /** Two-step with hip sway and counter-rotating shoulders. */
+  /** Two-step: a weight change to each side per bar, arms swinging against the legs. */
   step(bar, beat, energy) {
     const shift = Math.sin(bar * Math.PI * 2);
-    const drive = 0.5 + energy * 0.7;
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -attack(beat) * 0.05 * drive,
-      sway: shift * 0.10 * drive,
-      turn: shift * 20 * DEG,
-      spineBend: 5 * DEG,
-      spineTwist: -shift * 16 * DEG,
-      head: { swing: attack(beat) * 10 * DEG, lift: shift * 8 * DEG },
-      travel: shift * 0.30 * drive,
+      bob: -attack(beat) * 0.035 * drive,
+      sway: shift * 0.09 * drive,
+      turn: shift * 10 * DEG,
+      spineBend: 4 * DEG,
+      spineTwist: -shift * 12 * DEG,
+      head: { swing: attack(beat) * 8 * DEG, lift: shift * 6 * DEG },
+      travel: shift * 0.25 * drive,
       arms: [
-        { swing: (-40 - shift * 45) * DEG * drive, lift: (18 + shift * 14) * DEG,
-          elbow: (55 + shift * 25) * DEG },
-        { swing: (-40 + shift * 45) * DEG * drive, lift: (18 - shift * 14) * DEG,
-          elbow: (55 - shift * 25) * DEG },
+        { swing: (-30 + shift * 26 * drive) * DEG, lift: 26 * DEG, elbow: (72 - shift * 14) * DEG },
+        { swing: (-30 - shift * 26 * drive) * DEG, lift: 26 * DEG, elbow: (72 + shift * 14) * DEG },
       ],
       legs: [
-        { swing: (18 + shift * 26) * DEG * drive, lift: 6 * DEG, knee: (24 - shift * 18) * DEG },
-        { swing: (18 - shift * 26) * DEG * drive, lift: -6 * DEG, knee: (24 + shift * 18) * DEG },
+        { swing: (3 + shift * 16 * drive) * DEG, lift: 5 * DEG,
+          knee: (14 + Math.max(0, -shift) * 18) * DEG },
+        { swing: (3 - shift * 16 * drive) * DEG, lift: 5 * DEG,
+          knee: (14 + Math.max(0, shift) * 18) * DEG },
       ],
     };
   },
 
-  /** Arms overhead, jumping on every beat. */
+  /** Hands up: arms high in a wide V, bouncing on the beat. The hype move. */
   reach(bar, beat, energy, punch) {
     const hit = attack(beat);
-    const drive = 0.6 + energy * 0.8;
-    const wave = Math.sin(bar * Math.PI * 4);
+    const wave = Math.sin(bar * Math.PI * 2);
+    const drive = 0.7 + energy * 0.5;
     return {
-      // Positive Y is upward. The former sign made jumps sink on the beat.
-      bob: (hit * 0.16 + punch * 0.05) * drive,
-      sway: wave * 0.04,
-      turn: wave * 14 * DEG,
-      spineBend: -12 * DEG - hit * 8 * DEG,
-      spineTwist: wave * 12 * DEG,
-      head: { swing: -hit * 16 * DEG, lift: 0 },
+      bob: -hit * (0.04 + punch * 0.03) * drive,
+      sway: wave * 0.05,
+      turn: wave * 8 * DEG,
+      spineBend: -7 * DEG,
+      spineTwist: wave * 8 * DEG,
+      head: { swing: -(8 + hit * 8) * DEG, lift: wave * 5 * DEG },
       travel: 0,
       arms: [
-        { swing: (-150 - wave * 20) * DEG, lift: (30 + wave * 22) * DEG,
-          elbow: (12 + hit * 26) * DEG },
-        { swing: (-150 + wave * 20) * DEG, lift: (-30 + wave * 22) * DEG,
-          elbow: (12 + hit * 26) * DEG },
+        { swing: (-168 + wave * 6) * DEG, lift: (38 + wave * 8) * DEG, elbow: (8 + hit * 24) * DEG },
+        { swing: (-168 - wave * 6) * DEG, lift: (38 - wave * 8) * DEG, elbow: (8 + hit * 24) * DEG },
       ],
       legs: [
-        { swing: (10 + hit * 22) * DEG, lift: (10 + hit * 14) * DEG, knee: (28 + hit * 44) * DEG * drive },
-        { swing: (10 + hit * 22) * DEG, lift: (-10 - hit * 14) * DEG, knee: (28 + hit * 44) * DEG * drive },
+        { swing: 3 * DEG, lift: 6 * DEG, knee: (14 + hit * 26 * drive) * DEG },
+        { swing: 3 * DEG, lift: 6 * DEG, knee: (14 + hit * 26 * drive) * DEG },
       ],
     };
   },
 
-  /** Travelling run with a full opposed arm swing. */
+  /** Running: knees driving, arms pumping against them, leaning into it. */
   run(bar, beat, energy) {
     const cycle = Math.sin(bar * Math.PI * 4);
-    const opposite = Math.cos(bar * Math.PI * 4);
-    const drive = 0.6 + energy * 0.9;
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -Math.abs(cycle) * 0.07 * drive,
+      bob: -Math.abs(cycle) * 0.05 * drive,
       sway: cycle * 0.03,
-      turn: 26 * DEG,
-      spineBend: 16 * DEG,
-      spineTwist: -opposite * 22 * DEG,
-      head: { swing: 6 * DEG, lift: 0 },
-      travel: 1.4 * drive,
+      turn: 0,
+      spineBend: 12 * DEG,
+      spineTwist: -cycle * 14 * DEG,
+      head: { swing: -4 * DEG, lift: 0 },
+      travel: 0.6 * drive,
       arms: [
-        { swing: (-55 + opposite * 70) * DEG * drive, lift: 14 * DEG,
-          elbow: (78 - opposite * 26) * DEG },
-        { swing: (-55 - opposite * 70) * DEG * drive, lift: -14 * DEG,
-          elbow: (78 + opposite * 26) * DEG },
+        { swing: (-35 + cycle * 45 * drive) * DEG, lift: 20 * DEG, elbow: (88 - cycle * 10) * DEG },
+        { swing: (-35 - cycle * 45 * drive) * DEG, lift: 20 * DEG, elbow: (88 + cycle * 10) * DEG },
       ],
       legs: [
-        { swing: cycle * 52 * DEG * drive, lift: 4 * DEG, knee: (34 + cycle * 46) * DEG },
-        { swing: -cycle * 52 * DEG * drive, lift: -4 * DEG, knee: (34 - cycle * 46) * DEG },
-      ],
-    };
-  },
-
-  /** Floss: both arms crossing to one side while the hips counter-swing. */
-  floss(bar, beat, energy) {
-    const swing = Math.sin(bar * Math.PI * 4);
-    const drive = 0.6 + energy * 0.6;
-    return {
-      bob: -attack(beat) * 0.04,
-      sway: -swing * 0.09 * drive,
-      turn: -swing * 16 * DEG,
-      spineBend: 6 * DEG,
-      spineTwist: swing * 26 * DEG,
-      head: { swing: swing * 10 * DEG, lift: 0 },
-      travel: 0,
-      arms: [
-        { swing: (-30 + swing * 20) * DEG, lift: (65 + swing * 55) * DEG * drive,
-          elbow: (70 - swing * 45) * DEG },
-        { swing: (-30 + swing * 20) * DEG, lift: (-65 + swing * 55) * DEG * drive,
-          elbow: (70 + swing * 45) * DEG },
-      ],
-      legs: [
-        { swing: (12 + swing * 10) * DEG, lift: 8 * DEG, knee: 22 * DEG },
-        { swing: (12 - swing * 10) * DEG, lift: -8 * DEG, knee: 22 * DEG },
-      ],
-    };
-  },
-
-  /** Robot: quantised phase, so joints snap between held positions. */
-  robot(bar, beat, energy) {
-    const step = Math.floor(bar * 8) / 8;
-    const flip = Math.sin(step * Math.PI * 2);
-    const alt = Math.cos(step * Math.PI * 4);
-    const drive = 0.5 + energy * 0.5;
-    return {
-      bob: 0,
-      sway: flip * 0.05,
-      turn: flip * 30 * DEG,
-      spineBend: 0,
-      spineTwist: -flip * 18 * DEG,
-      head: { swing: 0, lift: flip * 14 * DEG },
-      travel: 0,
-      arms: [
-        { swing: (-90 + flip * 60) * DEG * drive, lift: (10 + alt * 40) * DEG, elbow: 90 * DEG },
-        { swing: (-90 - flip * 60) * DEG * drive, lift: (-10 + alt * 40) * DEG, elbow: 90 * DEG },
-      ],
-      legs: [
-        { swing: 8 * DEG, lift: 8 * DEG, knee: 10 * DEG },
-        { swing: 8 * DEG, lift: -8 * DEG, knee: 10 * DEG },
-      ],
-    };
-  },
-
-  /** Spin: a full turn per bar with arms extended. */
-  spin(bar, beat, energy) {
-    const drive = 0.6 + energy * 0.6;
-    return {
-      bob: -attack(beat) * 0.05,
-      sway: 0,
-      turn: bar * 360 * DEG,
-      spineBend: -6 * DEG,
-      spineTwist: 0,
-      head: { swing: 0, lift: 0 },
-      travel: 0.35,
-      arms: [
-        { swing: -85 * DEG, lift: 80 * DEG * drive, elbow: 10 * DEG },
-        { swing: -85 * DEG, lift: -80 * DEG * drive, elbow: 10 * DEG },
-      ],
-      legs: [
-        { swing: 14 * DEG, lift: 12 * DEG, knee: (20 + attack(beat) * 26) * DEG },
-        { swing: 6 * DEG, lift: -6 * DEG, knee: 16 * DEG },
-      ],
-    };
-  },
-
-  /** Wave travelling up the body, arms trailing behind it. */
-  wave(bar, beat, energy) {
-    const w = Math.sin(bar * Math.PI * 2);
-    const late = Math.sin(bar * Math.PI * 2 - 1.1);
-    const drive = 0.5 + energy * 0.7;
-    return {
-      bob: -swell(bar) * 0.05 * drive,
-      sway: w * 0.07,
-      turn: w * 24 * DEG,
-      spineBend: late * 24 * DEG * drive,
-      spineTwist: w * 20 * DEG,
-      head: { swing: -late * 16 * DEG, lift: w * 10 * DEG },
-      travel: w * 0.20,
-      arms: [
-        { swing: (-70 + late * 60) * DEG, lift: (40 + w * 30) * DEG, elbow: (60 + w * 30) * DEG },
-        { swing: (-70 - late * 60) * DEG, lift: (-40 + w * 30) * DEG, elbow: (60 - w * 30) * DEG },
-      ],
-      legs: [
-        { swing: (16 + w * 12) * DEG, lift: 8 * DEG, knee: (22 + swell(bar) * 22) * DEG },
-        { swing: (16 - w * 12) * DEG, lift: -8 * DEG, knee: (22 + swell(bar) * 22) * DEG },
-      ],
-    };
-  },
-
-  /** Jump: crouch, launch, tuck, land. Reads clearly even in wide shot. */
-  jump(bar, beat, energy) {
-    // A four-stage cycle across the bar rather than a sine, so the crouch and
-    // the landing are distinct beats instead of a continuous bounce.
-    const t = bar;
-    const crouch = Math.max(0, 1 - Math.abs(t - 0.10) * 8);
-    const air = Math.max(0, Math.sin((t - 0.15) * Math.PI * 1.4));
-    const drive = 0.6 + energy * 0.8;
-    return {
-      // Crouch lowers the hips; airborne motion raises them.
-      bob: (-crouch * 0.22 + air * 0.55) * drive,
-      sway: 0,
-      turn: air * 30 * DEG,
-      spineBend: crouch * 30 * DEG - air * 14 * DEG,
-      spineTwist: 0,
-      head: { swing: -air * 18 * DEG + crouch * 14 * DEG, lift: 0 },
-      travel: air * 0.5,
-      arms: [
-        { swing: (-30 - air * 130 + crouch * 60) * DEG, lift: (20 + air * 25) * DEG,
-          elbow: (40 - air * 30) * DEG },
-        { swing: (-30 - air * 130 + crouch * 60) * DEG, lift: (-20 - air * 25) * DEG,
-          elbow: (40 - air * 30) * DEG },
-      ],
-      legs: [
-        { swing: (10 + air * 40) * DEG, lift: 10 * DEG,
-          knee: (crouch * 75 + air * 70) * DEG * drive },
-        { swing: (10 + air * 25) * DEG, lift: -10 * DEG,
-          knee: (crouch * 75 + air * 50) * DEG * drive },
+        { swing: (8 + cycle * 38 * drive) * DEG, lift: 3 * DEG,
+          knee: (28 + Math.max(0, cycle) * 58) * DEG },
+        { swing: (8 - cycle * 38 * drive) * DEG, lift: 3 * DEG,
+          knee: (28 + Math.max(0, -cycle) * 58) * DEG },
       ],
     };
   },
 
   /**
-   * Sing: one arm up holding a mic, body leaning into the phrase.
+   * Floss: straight arms swung together to one side, one in front of the body
+   * and one behind, while the hips swing the other way.
+   */
+  floss(bar, beat, energy) {
+    const s = Math.sin(bar * Math.PI * 4);
+    // Squared off, so each side is a hit that holds rather than a pendulum.
+    const side = Math.sign(s) * Math.min(1, Math.abs(s) * 1.6);
+    const drive = 0.75 + energy * 0.4;
+    return {
+      bob: -attack(beat) * 0.03,
+      sway: -side * 0.11 * drive,
+      turn: 0,
+      spineBend: 4 * DEG,
+      spineTwist: side * 10 * DEG,
+      head: { swing: 4 * DEG, lift: -side * 6 * DEG },
+      travel: 0,
+      arms: [
+        { swing: side * 22 * DEG, lift: (18 + side * 38 * drive) * DEG, elbow: 12 * DEG },
+        { swing: -side * 22 * DEG, lift: (18 - side * 38 * drive) * DEG, elbow: 12 * DEG },
+      ],
+      legs: [
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, side) * 10) * DEG },
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, -side) * 10) * DEG },
+      ],
+    };
+  },
+
+  /**
+   * Robot: joints locked, snapping between held positions on the eighth notes.
+   * The stillness between the snaps is the move.
+   */
+  robot(bar, beat, energy) {
+    const step = Math.floor(bar * 8) % 4;
+    // Forearms level in front; one arm thrown straight out; back; the other.
+    const held = [
+      [[-44, 10, 82, 0.3], [-44, 10, 82, 0.3]],
+      [[-92, 6, 4, 0], [-10, 16, 84, 0.5]],
+      [[-44, 10, 82, 0.3], [-44, 10, 82, 0.3]],
+      [[-10, 16, 84, 0.5], [-92, 6, 4, 0]],
+    ][step];
+    const facing = step === 1 ? 1 : step === 3 ? -1 : 0;
+    const drive = 0.8 + energy * 0.3;
+    return {
+      bob: 0,
+      sway: facing * 0.04,
+      turn: facing * 18 * DEG * drive,
+      spineBend: 0,
+      spineTwist: -facing * 8 * DEG,
+      head: { swing: 0, lift: -facing * 14 * DEG },
+      travel: 0,
+      arms: held.map(([swing, lift, elbow, flare]) => ({
+        swing: swing * DEG, lift: lift * DEG, elbow: elbow * DEG, flare,
+      })),
+      legs: [
+        { swing: 2 * DEG, lift: 6 * DEG, knee: 8 * DEG },
+        { swing: 2 * DEG, lift: 6 * DEG, knee: 8 * DEG },
+      ],
+    };
+  },
+
+  /** Spin: a full turn each bar on one foot, arms held out level. */
+  spin(bar, beat) {
+    return {
+      bob: -attack(beat) * 0.03,
+      sway: 0,
+      turn: bar * Math.PI * 2,
+      spineBend: -4 * DEG,
+      spineTwist: 0,
+      head: { swing: -4 * DEG, lift: 0 },
+      travel: 0.2,
+      arms: [
+        { swing: -80 * DEG, lift: 78 * DEG, elbow: 12 * DEG },
+        { swing: -80 * DEG, lift: 78 * DEG, elbow: 12 * DEG },
+      ],
+      legs: [
+        { swing: 4 * DEG, lift: 4 * DEG, knee: 12 * DEG },
+        // The free foot tucked in beside the standing knee, as a pivot is.
+        { swing: 18 * DEG, lift: 1 * DEG, knee: 64 * DEG },
+      ],
+    };
+  },
+
+  /**
+   * Arm wave: arms out to the sides, a ripple running from one hand through
+   * the shoulders to the other.
+   */
+  wave(bar, beat, energy) {
+    const phase = bar * Math.PI * 2;
+    const lead = Math.sin(phase);
+    const middle = Math.sin(phase - 0.7);
+    const follow = Math.sin(phase - 1.4);
+    const drive = 0.7 + energy * 0.5;
+    return {
+      bob: -swell(beat) * 0.02,
+      sway: middle * 0.06,
+      turn: 0,
+      spineBend: 2 * DEG,
+      spineTwist: 0,
+      head: { swing: 0, lift: -middle * 10 * DEG },
+      travel: 0,
+      arms: [
+        { swing: -20 * DEG, lift: (86 + lead * 22 * drive) * DEG,
+          elbow: (16 + (1 - lead) * 18) * DEG },
+        { swing: -20 * DEG, lift: (86 + follow * 22 * drive) * DEG,
+          elbow: (16 + (1 - follow) * 18) * DEG },
+      ],
+      legs: [
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, middle) * 10) * DEG },
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, -middle) * 10) * DEG },
+      ],
+    };
+  },
+
+  /** Jump: crouch with the arms back, spring up with them thrown high, tuck, land. */
+  jump(bar, beat, energy) {
+    // A cycle across the bar rather than a sine, so the crouch and the landing
+    // are distinct beats instead of a continuous bounce.
+    const crouch = Math.max(0, 1 - Math.abs(bar - 0.10) * 7);
+    const air = Math.max(0, Math.sin((bar - 0.18) * Math.PI * 1.5));
+    const land = Math.max(0, 1 - Math.abs(bar - 0.88) * 9);
+    const drive = 0.7 + energy * 0.5;
+    return {
+      bob: -crouch * 0.16 - land * 0.08 + air * 0.4 * drive,
+      sway: 0,
+      turn: 0,
+      spineBend: (crouch * 26 + land * 14 - air * 8) * DEG,
+      spineTwist: 0,
+      head: { swing: (crouch * 12 - air * 14) * DEG, lift: 0 },
+      travel: 0,
+      arms: [
+        { swing: (crouch * 30 - air * 172 - land * 50) * DEG, lift: (16 + air * 16) * DEG,
+          elbow: (22 - air * 12) * DEG },
+        { swing: (crouch * 30 - air * 172 - land * 50) * DEG, lift: (16 + air * 16) * DEG,
+          elbow: (22 - air * 12) * DEG },
+      ],
+      legs: [
+        { swing: (crouch * 20 + air * 42 + land * 16) * DEG, lift: (5 + air * 4) * DEG,
+          knee: (12 + crouch * 72 + air * 76 + land * 50) * DEG },
+        { swing: (crouch * 20 + air * 36 + land * 16) * DEG, lift: (5 + air * 4) * DEG,
+          knee: (12 + crouch * 72 + air * 70 + land * 50) * DEG },
+      ],
+    };
+  },
+
+  /**
+   * Sing: the mic held just under the chin, the free hand reaching out to the
+   * room with the phrase.
    *
-   * Reserved for lead performers, which is what makes a duet legible - one
-   * figure sings while the others dance behind.
+   * Reserved for the lead, which is what makes a group legible: one figure
+   * sings while the others dance behind.
    */
   sing(bar, beat, energy, punch) {
     const phrase = Math.sin(bar * Math.PI * 2);
-    const emphasis = attack(beat) * (0.5 + punch * 0.5);
-    const drive = 0.5 + energy * 0.7;
+    const emphasis = attack(beat) * (0.4 + punch * 0.6);
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -emphasis * 0.05 * drive,
-      sway: phrase * 0.07,
-      turn: phrase * 18 * DEG,
-      spineBend: -10 * DEG - emphasis * 12 * DEG,
-      spineTwist: phrase * 14 * DEG,
-      head: { swing: -14 * DEG - emphasis * 16 * DEG, lift: phrase * 10 * DEG },
-      travel: phrase * 0.12,
+      bob: -emphasis * 0.03,
+      sway: phrase * 0.06,
+      turn: phrase * 12 * DEG,
+      spineBend: (-4 - emphasis * 6) * DEG,
+      spineTwist: phrase * 8 * DEG,
+      head: { swing: (-6 - emphasis * 8) * DEG, lift: phrase * 8 * DEG },
+      travel: phrase * 0.08,
       arms: [
-        // Mic hand held near the face and steady.
-        { swing: -128 * DEG, lift: 26 * DEG, elbow: 92 * DEG },
-        // Free hand gestures with the phrasing.
-        { swing: (-40 - phrase * 70) * DEG * drive, lift: (-45 - phrase * 40) * DEG,
-          elbow: (50 + phrase * 40) * DEG },
+        // The mic at the chin rather than the mouth. A hand held over the face
+        // merges the forearm into the head, which is the arm-stuck-to-the-head
+        // look the figures were rewritten to lose.
+        { swing: -98 * DEG, lift: -22 * DEG, elbow: 108 * DEG },
+        { swing: (-80 - phrase * 25 * drive) * DEG, lift: (38 + phrase * 16) * DEG,
+          elbow: (24 + emphasis * 20) * DEG },
       ],
       legs: [
-        { swing: (12 + phrase * 14) * DEG, lift: 9 * DEG, knee: (18 + emphasis * 20) * DEG },
-        { swing: (12 - phrase * 14) * DEG, lift: -9 * DEG, knee: (18 + emphasis * 20) * DEG },
+        { swing: (3 + phrase * 8) * DEG, lift: 5 * DEG,
+          knee: (14 + emphasis * 14 + Math.max(0, -phrase) * 8) * DEG },
+        { swing: (3 - phrase * 8) * DEG, lift: 5 * DEG,
+          knee: (14 + emphasis * 14 + Math.max(0, phrase) * 8) * DEG },
       ],
     };
   },
 
-  /** Groove: loose hips and shoulders, everything moving at once. */
+  /** Groove: a loose bounce in the knees, hips and shoulders rolling against each other. */
   groove(bar, beat, energy) {
     const hip = Math.sin(bar * Math.PI * 4);
-    const shoulder = Math.sin(bar * Math.PI * 4 + 1.6);
-    const drive = 0.55 + energy * 0.75;
+    const roll = Math.sin(bar * Math.PI * 4 + 1.6);
+    const bounce = attack(beat);
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -attack(beat) * 0.07 * drive,
-      sway: hip * 0.13 * drive,
-      turn: hip * 26 * DEG,
-      spineBend: 8 * DEG + shoulder * 10 * DEG,
-      spineTwist: -shoulder * 30 * DEG * drive,
-      head: { swing: attack(beat) * 14 * DEG, lift: hip * 12 * DEG },
-      travel: hip * 0.22,
+      bob: -bounce * 0.05 * drive,
+      sway: hip * 0.10 * drive,
+      turn: hip * 12 * DEG,
+      spineBend: (6 + roll * 5) * DEG,
+      spineTwist: -roll * 14 * DEG * drive,
+      head: { swing: bounce * 10 * DEG, lift: hip * 8 * DEG },
+      travel: hip * 0.15,
       arms: [
-        { swing: (-60 - shoulder * 60) * DEG * drive, lift: (35 + hip * 30) * DEG,
-          elbow: (70 + shoulder * 35) * DEG },
-        { swing: (-60 + shoulder * 60) * DEG * drive, lift: (-35 + hip * 30) * DEG,
-          elbow: (70 - shoulder * 35) * DEG },
+        { swing: (-40 - roll * 22 * drive) * DEG, lift: (32 + hip * 10) * DEG,
+          elbow: (82 + roll * 14) * DEG },
+        { swing: (-40 + roll * 22 * drive) * DEG, lift: (32 - hip * 10) * DEG,
+          elbow: (82 - roll * 14) * DEG },
       ],
       legs: [
-        { swing: (14 + hip * 30) * DEG * drive, lift: (10 + hip * 8) * DEG,
-          knee: (30 - hip * 22) * DEG },
-        { swing: (14 - hip * 30) * DEG * drive, lift: (-10 + hip * 8) * DEG,
-          knee: (30 + hip * 22) * DEG },
+        { swing: (4 + hip * 10) * DEG, lift: 6 * DEG,
+          knee: (20 + bounce * 18 + Math.max(0, hip) * 10) * DEG },
+        { swing: (4 - hip * 10) * DEG, lift: 6 * DEG,
+          knee: (20 + bounce * 18 + Math.max(0, -hip) * 10) * DEG },
       ],
     };
   },
 
-  /** March: knees high, arms driving, very readable at distance. */
+  /** March: knees lifted high in turn, arms driving against them. Reads at any distance. */
   march(bar, beat, energy) {
-    const cycle = Math.sin(bar * Math.PI * 4);
-    const drive = 0.6 + energy * 0.7;
+    const c = Math.sin(bar * Math.PI * 4);
+    const up = [Math.max(0, c), Math.max(0, -c)];
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -Math.abs(cycle) * 0.05 * drive,
-      sway: cycle * 0.05,
-      turn: 12 * DEG,
-      spineBend: 4 * DEG,
-      spineTwist: -cycle * 18 * DEG,
+      bob: -Math.abs(c) * 0.02,
+      sway: c * 0.04,
+      turn: 0,
+      spineBend: 2 * DEG,
+      spineTwist: -c * 10 * DEG,
       head: { swing: 0, lift: 0 },
-      travel: 0.5 * drive,
+      travel: 0,
       arms: [
-        { swing: (-55 + cycle * 75) * DEG * drive, lift: 16 * DEG, elbow: 88 * DEG },
-        { swing: (-55 - cycle * 75) * DEG * drive, lift: -16 * DEG, elbow: 88 * DEG },
+        { swing: (-30 + c * 40 * drive) * DEG, lift: 20 * DEG, elbow: 88 * DEG },
+        { swing: (-30 - c * 40 * drive) * DEG, lift: 20 * DEG, elbow: 88 * DEG },
       ],
-      legs: [
-        { swing: Math.max(0, cycle) * 70 * DEG * drive, lift: 6 * DEG,
-          knee: Math.max(0, cycle) * 85 * DEG },
-        { swing: Math.max(0, -cycle) * 70 * DEG * drive, lift: -6 * DEG,
-          knee: Math.max(0, -cycle) * 85 * DEG },
-      ],
+      legs: up.map((raised) => ({
+        swing: raised * 68 * drive * DEG, lift: 4 * DEG, knee: (6 + raised * 95) * DEG,
+      })),
     };
   },
 
   /**
-   * Clap: hands meeting on the beat, held apart between.
+   * Clap: hands meeting in front of the chest on the beat, held open between.
    *
    * A held position between hits is what makes a movement read as deliberate.
    * Motions that ease continuously from one extreme to the other look like
    * drifting; pausing at the extremes looks like intent.
    */
   clap(bar, beat, energy) {
-    // Snap closed on the beat and open slowly, rather than a symmetric sine.
-    const closed = Math.pow(Math.max(0, 1 - beat * 2.2), 1.6);
-    const drive = 0.6 + energy * 0.6;
+    // Closing fast over the last fifth of the beat and opening slowly after it,
+    // rather than a symmetric sine. It snapped shut on the beat itself, which
+    // left the pose springs no time: the hands reached 79% of their travel,
+    // and after the beat rather than on it.
+    const closed = beat < 0.45
+      ? Math.pow(1 - beat / 0.45, 1.6)
+      : Math.pow(Math.max(0, 1 - (1 - beat) / 0.18), 1.2);
+    const drive = 0.75 + energy * 0.4;
+    // Open wide, then crossed far enough that the two hands meet on the midline.
+    const lift = (44 * drive - closed * 66) * DEG;
     return {
-      bob: -closed * 0.05 * drive,
+      bob: -closed * 0.04 * drive,
       sway: 0,
       turn: 0,
-      spineBend: -6 * DEG - closed * 10 * DEG,
+      spineBend: (4 + closed * 6) * DEG,
       spineTwist: 0,
-      head: { swing: -closed * 12 * DEG, lift: 0 },
+      head: { swing: closed * 8 * DEG, lift: 0 },
       travel: 0,
       arms: [
-        { swing: -95 * DEG, lift: (48 - closed * 44) * DEG * drive, elbow: 82 * DEG },
-        { swing: -95 * DEG, lift: (-48 + closed * 44) * DEG * drive, elbow: 82 * DEG },
+        { swing: -72 * DEG, lift, elbow: (34 + closed * 10) * DEG },
+        { swing: -72 * DEG, lift, elbow: (34 + closed * 10) * DEG },
       ],
       legs: [
-        { swing: (10 + closed * 8) * DEG, lift: 8 * DEG, knee: (16 + closed * 20) * DEG },
-        { swing: (10 + closed * 8) * DEG, lift: -8 * DEG, knee: (16 + closed * 20) * DEG },
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (14 + closed * 16) * DEG },
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (14 + closed * 16) * DEG },
       ],
     };
   },
 
-  /** Point: one arm thrown out and held, the other tucked. */
-  point(bar, beat, energy) {
-    // The arm holds for three quarters of the bar, then resets. Holding is the
-    // whole gesture; a pointing arm that keeps moving is just waving.
-    const held = bar < 0.75 ? 1 : 1 - (bar - 0.75) * 4;
-    const side = Math.floor(bar * 2) % 2 === 0 ? 1 : -1;
-    const drive = 0.6 + energy * 0.5;
+  /**
+   * Point: one arm thrown up to the far corner and held, the other hand on the
+   * hip, changing sides each half bar.
+   */
+  point(bar, beat) {
+    const half = Math.floor(bar * 2) % 2;
+    const within = (bar * 2) % 1;
+    // Out fast, held, back at the end. Holding is the whole gesture; a
+    // pointing arm that keeps moving is just waving.
+    const held = within < 0.8 ? Math.min(1, within * 8) : 1 - (within - 0.8) * 5;
+    const pointing = {
+      swing: (-60 - held * 100) * DEG, lift: (20 + held * 18) * DEG, elbow: (40 - held * 36) * DEG,
+    };
+    const onHip = { swing: 8 * DEG, lift: 12 * DEG, elbow: 104 * DEG, flare: 1 };
+    const side = half === 0 ? 1 : -1;
     return {
-      bob: -attack(beat) * 0.04,
-      sway: side * held * 0.06,
-      turn: side * held * 26 * DEG,
-      spineBend: -8 * DEG,
-      spineTwist: side * held * 22 * DEG,
-      head: { swing: -10 * DEG, lift: side * held * 12 * DEG },
+      bob: -attack(beat) * 0.03,
+      sway: -side * held * 0.07,
+      turn: side * held * 12 * DEG,
+      spineBend: -4 * DEG,
+      spineTwist: side * held * 10 * DEG,
+      head: { swing: -held * 10 * DEG, lift: side * held * 8 * DEG },
       travel: 0,
-      arms: [
-        { swing: (-70 - held * 45) * DEG * drive, lift: side > 0 ? held * 70 * DEG : 20 * DEG,
-          elbow: (14 + (1 - held) * 50) * DEG },
-        { swing: -50 * DEG, lift: -30 * DEG, elbow: 96 * DEG },
-      ],
+      arms: half === 0 ? [pointing, onHip] : [onHip, pointing],
       legs: [
-        { swing: (14 + held * 10) * DEG, lift: 10 * DEG, knee: 20 * DEG },
-        { swing: (14 - held * 6) * DEG, lift: -10 * DEG, knee: 24 * DEG },
+        { swing: 3 * DEG, lift: (5 + (half === 0 ? held * 5 : 0)) * DEG,
+          knee: (half === 0 ? 8 : 24) * DEG },
+        { swing: 3 * DEG, lift: (5 + (half === 1 ? held * 5 : 0)) * DEG,
+          knee: (half === 1 ? 8 : 24) * DEG },
       ],
     };
   },
 
-  /** Headbang: sharp nod on the beat, whole spine following. */
+  /** Headbang: a hard nod on the beat with the whole spine following it down. */
   headbang(bar, beat, energy) {
-    const snap = Math.pow(Math.max(0, 1 - beat * 1.8), 1.4);
-    const drive = 0.6 + energy * 0.8;
+    const hit = attack(beat);
+    const drive = 0.75 + energy * 0.4;
     return {
-      bob: -snap * 0.06 * drive,
+      bob: -hit * 0.05 * drive,
       sway: 0,
       turn: 0,
-      spineBend: (10 + snap * 46) * DEG * drive,
+      spineBend: (10 + hit * 22 * drive) * DEG,
       spineTwist: 0,
-      head: { swing: (14 + snap * 60) * DEG * drive, lift: 0 },
+      head: { swing: (-10 + hit * 44 * drive) * DEG, lift: 0 },
       travel: 0,
+      // Fists low and pumping with the nod.
       arms: [
-        { swing: (-30 - snap * 40) * DEG, lift: (55 + snap * 20) * DEG, elbow: 100 * DEG },
-        { swing: (-30 - snap * 40) * DEG, lift: (-55 - snap * 20) * DEG, elbow: 100 * DEG },
+        { swing: (-36 - hit * 30) * DEG, lift: 26 * DEG, elbow: (96 - hit * 20) * DEG },
+        { swing: (-36 - hit * 30) * DEG, lift: 26 * DEG, elbow: (96 - hit * 20) * DEG },
       ],
       legs: [
-        { swing: (16 + snap * 12) * DEG, lift: 12 * DEG, knee: (26 + snap * 24) * DEG },
-        { swing: (16 + snap * 12) * DEG, lift: -12 * DEG, knee: (26 + snap * 24) * DEG },
+        { swing: 6 * DEG, lift: 8 * DEG, knee: (24 + hit * 14) * DEG },
+        { swing: 6 * DEG, lift: 8 * DEG, knee: (24 + hit * 14) * DEG },
       ],
     };
   },
 
-  /** Shimmy: fast shoulder shake over still hips. */
+  /** Shimmy: shoulders shaking fast over steady hips, leaning in. */
   shimmy(bar, beat, energy) {
-    // Deliberately much faster than the bar: the contrast between quick
-    // shoulders and a steady base is what makes it read as a shimmy.
+    // Much faster than the bar: the contrast between quick shoulders and a
+    // steady base is what makes it read as a shimmy.
     const shake = Math.sin(bar * Math.PI * 16);
-    const drive = 0.5 + energy * 0.7;
+    const drive = 0.75 + energy * 0.4;
     return {
-      bob: 0,
+      bob: -attack(beat) * 0.02,
       sway: Math.sin(bar * Math.PI * 2) * 0.05,
-      turn: shake * 10 * DEG,
-      spineBend: 4 * DEG,
-      spineTwist: shake * 26 * DEG * drive,
-      head: { swing: 0, lift: -shake * 8 * DEG },
+      turn: 0,
+      spineBend: 12 * DEG,
+      spineTwist: shake * 16 * DEG * drive,
+      head: { swing: -6 * DEG, lift: 0 },
       travel: 0,
       arms: [
-        { swing: (-58 + shake * 26) * DEG, lift: (52 + shake * 18) * DEG * drive, elbow: 88 * DEG },
-        { swing: (-58 - shake * 26) * DEG, lift: (-52 + shake * 18) * DEG * drive, elbow: 88 * DEG },
+        { swing: (-34 - shake * 10) * DEG, lift: 30 * DEG, elbow: 96 * DEG, flare: 0.4 },
+        { swing: (-34 + shake * 10) * DEG, lift: 30 * DEG, elbow: 96 * DEG, flare: 0.4 },
       ],
       legs: [
-        { swing: 12 * DEG, lift: 11 * DEG, knee: 22 * DEG },
-        { swing: 12 * DEG, lift: -11 * DEG, knee: 22 * DEG },
+        { swing: 6 * DEG, lift: 7 * DEG, knee: 28 * DEG },
+        { swing: 6 * DEG, lift: 7 * DEG, knee: 28 * DEG },
       ],
     };
   },
 
-  /** Kick: a held stance, then one leg thrown out on the beat. */
+  /** Kick: a straight leg thrown forward on the beat, arms out for balance. */
   kick(bar, beat, energy) {
-    const phase = bar * 2 % 1;
-    const swingOut = Math.pow(Math.max(0, 1 - Math.abs(phase - 0.25) * 5), 1.3);
+    const phase = (bar * 2) % 1;
+    const out = Math.pow(Math.max(0, 1 - Math.abs(phase - 0.25) * 5), 1.3);
     const side = bar < 0.5 ? 0 : 1;
-    const drive = 0.6 + energy * 0.7;
+    const drive = 0.75 + energy * 0.45;
+    const kicking = { swing: out * 72 * drive * DEG, lift: 4 * DEG, knee: (8 + (1 - out) * 22) * DEG };
+    const standing = { swing: -4 * DEG, lift: 5 * DEG, knee: (12 + out * 10) * DEG };
     return {
-      bob: -swingOut * 0.05,
-      sway: (side === 0 ? -1 : 1) * 0.07,
-      turn: (side === 0 ? -1 : 1) * 18 * DEG,
-      spineBend: -swingOut * 18 * DEG,
-      spineTwist: (side === 0 ? 1 : -1) * swingOut * 20 * DEG,
-      head: { swing: -8 * DEG, lift: 0 },
+      bob: out * 0.02,
+      sway: (side === 0 ? -1 : 1) * 0.05,
+      turn: 0,
+      spineBend: -out * 10 * DEG,
+      spineTwist: (side === 0 ? 1 : -1) * out * 10 * DEG,
+      head: { swing: -6 * DEG, lift: 0 },
       travel: 0,
       arms: [
-        { swing: (-60 - swingOut * 50) * DEG, lift: 40 * DEG, elbow: 70 * DEG },
-        { swing: (-60 + swingOut * 30) * DEG, lift: -40 * DEG, elbow: 70 * DEG },
+        { swing: (-40 - out * 20) * DEG, lift: (50 + out * 14) * DEG, elbow: 30 * DEG },
+        { swing: (-40 - out * 20) * DEG, lift: (50 + out * 14) * DEG, elbow: 30 * DEG },
       ],
-      legs: [
-        { swing: (side === 0 ? swingOut * 75 : 12) * DEG * drive, lift: 10 * DEG,
-          knee: (side === 0 ? 10 : 22) * DEG },
-        { swing: (side === 1 ? swingOut * 75 : 12) * DEG * drive, lift: -10 * DEG,
-          knee: (side === 1 ? 10 : 22) * DEG },
-      ],
+      legs: side === 0 ? [kicking, standing] : [standing, kicking],
     };
   },
 
-  /** Slide: gliding sideways with the body angled into the travel. */
+  /** Electric slide: stepping out and closing, sideways, the arms opening with it. */
   slide(bar, beat, energy) {
-    const direction = Math.sin(bar * Math.PI * 2);
-    const drive = 0.6 + energy * 0.6;
+    const s = Math.sin(bar * Math.PI * 2);
+    const open = Math.abs(s);
+    const drive = 0.75 + energy * 0.4;
     return {
-      bob: -Math.abs(direction) * 0.03,
-      sway: direction * 0.12 * drive,
-      turn: direction * 40 * DEG,
-      spineBend: 10 * DEG,
-      spineTwist: -direction * 24 * DEG,
-      head: { swing: -6 * DEG, lift: direction * 14 * DEG },
-      travel: direction * 1.1 * drive,
+      bob: -attack(beat) * 0.03,
+      sway: s * 0.10 * drive,
+      turn: s * 8 * DEG,
+      spineBend: 4 * DEG,
+      spineTwist: -s * 8 * DEG,
+      head: { swing: 0, lift: s * 10 * DEG },
+      travel: s * 0.6 * drive,
       arms: [
-        { swing: (-80 - direction * 40) * DEG, lift: (60 + direction * 25) * DEG, elbow: 40 * DEG },
-        { swing: (-80 + direction * 40) * DEG, lift: (-60 + direction * 25) * DEG, elbow: 40 * DEG },
+        { swing: -50 * DEG, lift: (26 + Math.max(0, s) * 44) * DEG, elbow: (60 - Math.max(0, s) * 40) * DEG },
+        { swing: -50 * DEG, lift: (26 + Math.max(0, -s) * 44) * DEG, elbow: (60 - Math.max(0, -s) * 40) * DEG },
       ],
       legs: [
-        { swing: (20 + direction * 28) * DEG * drive, lift: (14 + direction * 10) * DEG,
-          knee: (26 - direction * 14) * DEG },
-        { swing: (20 - direction * 28) * DEG * drive, lift: (-14 + direction * 10) * DEG,
-          knee: (26 + direction * 14) * DEG },
+        { swing: 2 * DEG, lift: (5 + Math.max(0, s) * 10 * drive) * DEG, knee: (14 + open * 10) * DEG },
+        { swing: 2 * DEG, lift: (5 + Math.max(0, -s) * 10 * drive) * DEG, knee: (14 + open * 10) * DEG },
       ],
     };
   },
 
-  /** Low sway for quiet passages. */
   // --- Named dances --------------------------------------------------------
-  //
-  // Everything above this point is a *character* of movement - a march, a
-  // groove, a reach. What follows are actual named dances, because a figure
-  // doing something an audience can name reads completely differently from one
-  // doing generic energetic motion. Recognition is the whole effect.
-  //
-  // Each is written to its own defining mechanic rather than to a general
-  // impression: the Twist is counter-rotation between hips and shoulders, the
-  // Charleston is heels kicking back on the offbeat, the Running Man is a foot
-  // sliding back under a lifted knee. Get the mechanic and the dance reads even
-  // on a stick figure; get only the energy and none of them do.
 
   /** Moonwalk: gliding backwards while appearing to walk forwards. */
   moonwalk(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 2);
     const drive = 0.7 + energy * 0.5;
-    // One leg stays straight with the heel up while the other slides back flat.
-    // The illusion is entirely in the contrast between the two.
-    const slide = Math.sin(bar * Math.PI * 4);
+    // One leg straight and sliding back flat while the other bends onto its
+    // toe. The illusion is entirely in the contrast between the two.
+    const sliding = (amount) => ({
+      swing: (4 - amount * 26 * drive) * DEG, lift: 3 * DEG, knee: 6 * DEG,
+    });
+    const onToe = { swing: 10 * DEG, lift: 3 * DEG, knee: 42 * DEG };
+    const back = Math.max(0, s);
+    const forth = Math.max(0, -s);
     return {
-      bob: -Math.abs(slide) * 0.030,
-      sway: s * 0.06,
-      turn: -18 * DEG,
+      bob: 0,
+      sway: s * 0.03,
+      turn: 0,
       spineBend: 6 * DEG,
-      spineTwist: s * 10 * DEG,
-      head: { swing: 6 * DEG, lift: s * 6 * DEG },
-      // Negative: the whole point is travelling the opposite way to the walk.
-      travel: -0.34 * drive,
+      spineTwist: -s * 6 * DEG,
+      head: { swing: 6 * DEG, lift: s * 5 * DEG },
+      travel: -0.4 * drive,
       arms: [
-        { swing: (-26 - s * 20) * DEG, lift: 20 * DEG, elbow: (40 + s * 10) * DEG },
-        { swing: (-26 + s * 20) * DEG, lift: 20 * DEG, elbow: (40 - s * 10) * DEG },
+        { swing: (-20 - s * 18) * DEG, lift: 24 * DEG, elbow: (44 + s * 12) * DEG },
+        { swing: (-20 + s * 18) * DEG, lift: 24 * DEG, elbow: (44 - s * 12) * DEG },
       ],
-      legs: [
-        { swing: (10 + slide * 30) * DEG * drive, lift: 3 * DEG,
-          knee: (10 + Math.max(0, slide) * 30) * DEG },
-        { swing: (10 - slide * 30) * DEG * drive, lift: -3 * DEG,
-          knee: (10 + Math.max(0, -slide) * 30) * DEG },
-      ],
+      legs: s >= 0 ? [sliding(back), onToe] : [onToe, sliding(forth)],
     };
   },
 
-  /** The Twist: hips and shoulders counter-rotating, heels grinding. */
+  /** The Twist: hips and shoulders turning against each other, knees bent low. */
   twist(bar, beat, energy) {
-    // Twice a bar, because the Twist is a fast alternation rather than a sway.
+    // Twice a bar: the Twist is a fast alternation rather than a sway.
     const s = Math.sin(bar * Math.PI * 4);
-    const drive = 0.75 + energy * 0.6;
+    const drive = 0.75 + energy * 0.4;
     return {
-      bob: -Math.abs(s) * 0.045 * drive,
-      sway: s * 0.05,
-      // The defining feature: the shoulders go one way as the hips go the other.
-      turn: s * 26 * DEG * drive,
+      bob: -Math.abs(s) * 0.03 - 0.03,
+      sway: 0,
+      turn: s * 24 * DEG * drive,
       spineBend: 8 * DEG,
-      spineTwist: -s * 34 * DEG * drive,
-      head: { swing: 8 * DEG, lift: -s * 8 * DEG },
+      spineTwist: -s * 36 * DEG * drive,
+      head: { swing: 4 * DEG, lift: -s * 6 * DEG },
       travel: 0,
-      // Elbows stay bent and low, hands tracking the hips like towelling off.
       arms: [
-        { swing: (-52 - s * 26) * DEG * drive, lift: (30 + s * 10) * DEG, elbow: 78 * DEG },
-        { swing: (-52 + s * 26) * DEG * drive, lift: (30 - s * 10) * DEG, elbow: 78 * DEG },
+        { swing: (-56 - s * 24) * DEG, lift: 40 * DEG, elbow: 96 * DEG, flare: 0.5 },
+        { swing: (-56 + s * 24) * DEG, lift: 40 * DEG, elbow: 96 * DEG, flare: 0.5 },
       ],
       legs: [
-        { swing: 12 * DEG, lift: (10 + s * 6) * DEG, knee: (26 + s * 10) * DEG },
-        { swing: 12 * DEG, lift: (-10 + s * 6) * DEG, knee: (26 - s * 10) * DEG },
+        { swing: 10 * DEG, lift: 6 * DEG, knee: (30 + s * 8) * DEG },
+        { swing: 10 * DEG, lift: 6 * DEG, knee: (30 - s * 8) * DEG },
       ],
     };
   },
 
-  /** Charleston: heels kicking back, arms swinging opposite the legs. */
+  /** Charleston: heels flicking back in turn, arms swinging against the legs. */
   charleston(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 2);
-    const kick = Math.sin(bar * Math.PI * 4);
-    const drive = 0.8 + energy * 0.7;
+    const flick = Math.sin(bar * Math.PI * 4);
+    const drive = 0.75 + energy * 0.45;
     return {
-      bob: attack(beat) * 0.05 * drive,
-      sway: s * 0.07,
-      turn: s * 16 * DEG,
-      spineBend: -6 * DEG,
-      spineTwist: -s * 18 * DEG,
-      head: { swing: -8 * DEG, lift: s * 10 * DEG },
+      bob: attack(beat) * 0.04 * drive,
+      sway: s * 0.06,
+      turn: s * 10 * DEG,
+      spineBend: 6 * DEG,
+      spineTwist: -s * 12 * DEG,
+      head: { swing: -4 * DEG, lift: s * 8 * DEG },
       travel: s * 0.10,
       // Arms swing opposite the legs, elbows loose and high - the twenties look.
       arms: [
-        { swing: (-58 + s * 62) * DEG * drive, lift: (26 + s * 14) * DEG, elbow: 64 * DEG },
-        { swing: (-58 - s * 62) * DEG * drive, lift: (26 - s * 14) * DEG, elbow: 64 * DEG },
+        { swing: (-50 + s * 46 * drive) * DEG, lift: 30 * DEG, elbow: 62 * DEG },
+        { swing: (-50 - s * 46 * drive) * DEG, lift: 30 * DEG, elbow: 62 * DEG },
       ],
       // Heels flick backwards rather than the knees lifting forwards, which is
       // what separates a Charleston from a march.
       legs: [
-        { swing: (14 - Math.max(0, kick) * 46) * DEG * drive, lift: 12 * DEG,
-          knee: (20 + Math.max(0, kick) * 70) * DEG },
-        { swing: (14 - Math.max(0, -kick) * 46) * DEG * drive, lift: -12 * DEG,
-          knee: (20 + Math.max(0, -kick) * 70) * DEG },
+        { swing: (4 - Math.max(0, flick) * 36) * DEG, lift: 6 * DEG,
+          knee: (12 + Math.max(0, flick) * 92) * DEG },
+        { swing: (4 - Math.max(0, -flick) * 36) * DEG, lift: 6 * DEG,
+          knee: (12 + Math.max(0, -flick) * 92) * DEG },
       ],
     };
   },
 
-  /** Running Man: knee lifts as the opposite foot slides back. */
+  /** Running Man: a knee lifting as the other foot slides back under it. */
   runningman(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 4);
-    const drive = 0.85 + energy * 0.8;
+    const drive = 0.75 + energy * 0.45;
+    const leg = (up) => ({
+      swing: (up > 0 ? up * 62 : up * 30) * drive * DEG,
+      lift: 4 * DEG,
+      knee: (14 + Math.max(0, up) * 88) * DEG,
+    });
     return {
-      bob: -Math.abs(s) * 0.05 * drive,
-      sway: s * 0.05,
-      turn: s * 10 * DEG,
-      spineBend: 10 * DEG,
-      spineTwist: -s * 14 * DEG,
-      head: { swing: 10 * DEG, lift: 0 },
+      bob: -Math.abs(s) * 0.03,
+      sway: 0,
+      turn: 0,
+      spineBend: 8 * DEG,
+      spineTwist: -s * 10 * DEG,
+      head: { swing: 6 * DEG, lift: 0 },
       travel: 0,
-      // Arms pump as if running, opposite to the legs.
+      // Fists pumping at chest height, pulling down as the knee comes up.
       arms: [
-        { swing: (-70 + s * 44) * DEG * drive, lift: 16 * DEG, elbow: 88 * DEG },
-        { swing: (-70 - s * 44) * DEG * drive, lift: 16 * DEG, elbow: 88 * DEG },
+        { swing: (-70 - s * 30) * DEG, lift: 26 * DEG, elbow: (96 - s * 12) * DEG },
+        { swing: (-70 + s * 30) * DEG, lift: 26 * DEG, elbow: (96 + s * 12) * DEG },
       ],
-      // One knee drives up while the other leg extends back - the two never
-      // meet in the middle, which is what sells the illusion of running in place.
-      legs: [
-        { swing: (-34 * Math.max(0, s) + 40 * Math.max(0, -s)) * DEG * drive,
-          lift: 5 * DEG, knee: (26 + Math.max(0, s) * 66) * DEG },
-        { swing: (-34 * Math.max(0, -s) + 40 * Math.max(0, s)) * DEG * drive,
-          lift: -5 * DEG, knee: (26 + Math.max(0, -s) * 66) * DEG },
-      ],
+      legs: [leg(s), leg(-s)],
     };
   },
 
-  /** The Dougie: a lean and shoulder roll with a hand brushing the head. */
+  /** The Dougie: a lean back and a rock of the shoulders, one hand brushing past the head. */
   dougie(bar, beat, energy) {
-    const s = Math.sin(bar * Math.PI * 2);
-    const drive = 0.7 + energy * 0.55;
-    return {
-      bob: -Math.abs(s) * 0.030,
-      sway: s * 0.16 * drive,
-      turn: s * 22 * DEG,
-      spineBend: 4 * DEG,
-      // The lean is the move. Shoulders roll across the body rather than the
-      // arms doing anything energetic.
-      spineTwist: s * 30 * DEG * drive,
-      head: { swing: 4 * DEG, lift: s * 16 * DEG },
-      travel: 0,
-      arms: [
-        // One hand up brushing past the head, the other loose at the hip.
-        { swing: (-126 + s * 16) * DEG, lift: 46 * DEG, elbow: 96 * DEG },
-        { swing: (-24 - s * 18) * DEG, lift: 22 * DEG, elbow: 52 * DEG },
-      ],
-      legs: [
-        { swing: (10 + s * 8) * DEG, lift: 9 * DEG, knee: (18 + Math.max(0, -s) * 16) * DEG },
-        { swing: (10 - s * 8) * DEG, lift: -9 * DEG, knee: (18 + Math.max(0, s) * 16) * DEG },
-      ],
-    };
-  },
-
-  /** Gangnam Style: crossed lasso arms over a bouncing horse-riding step. */
-  gangnam(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 4);
-    const drive = 0.9 + energy * 0.8;
+    const hand = Math.floor(bar * 2) % 2;
+    const drive = 0.75 + energy * 0.4;
+    const brush = { swing: (-150 + s * 10) * DEG, lift: 52 * DEG, elbow: 104 * DEG, flare: 0.8 };
+    const low = { swing: (-26 - s * 14) * DEG, lift: 26 * DEG, elbow: 54 * DEG };
     return {
-      // The bounce is constant and vertical - the horse-riding half of it.
-      bob: (attack(beat) * 0.10 - 0.02) * drive,
-      sway: s * 0.05,
-      turn: s * 12 * DEG,
-      spineBend: -4 * DEG,
-      spineTwist: s * 12 * DEG,
-      head: { swing: -10 * DEG, lift: s * 6 * DEG },
-      travel: s * 0.12,
-      arms: [
-        // One arm crosses low in front, the other swings the lasso overhead.
-        { swing: -150 * DEG, lift: (24 + s * 26) * DEG, elbow: 42 * DEG },
-        { swing: -44 * DEG, lift: -20 * DEG, elbow: 92 * DEG },
-      ],
+      bob: -attack(beat) * 0.04 * drive,
+      sway: s * 0.10 * drive,
+      turn: s * 14 * DEG,
+      spineBend: -8 * DEG,
+      spineTwist: s * 14 * DEG,
+      head: { swing: -6 * DEG, lift: s * 12 * DEG },
+      travel: 0,
+      arms: hand === 0 ? [brush, low] : [low, brush],
       legs: [
-        { swing: (16 + s * 14) * DEG * drive, lift: 8 * DEG, knee: (30 + s * 16) * DEG },
-        { swing: (16 - s * 14) * DEG * drive, lift: -8 * DEG, knee: (30 - s * 16) * DEG },
+        { swing: (4 + s * 8) * DEG, lift: 6 * DEG, knee: (20 + Math.max(0, -s) * 16) * DEG },
+        { swing: (4 - s * 8) * DEG, lift: 6 * DEG, knee: (20 + Math.max(0, s) * 16) * DEG },
       ],
     };
   },
 
-  /** Macarena: the four-count arm sequence, hips rolling underneath. */
-  macarena(bar, beat, energy) {
-    // Four distinct positions across the bar rather than a continuous curve -
-    // the Macarena is a sequence, and a smooth blend would erase it.
-    const stage = Math.floor(bar * 4) % 4;
-    const s = Math.sin(bar * Math.PI * 2);
-    const drive = 0.75 + energy * 0.5;
-    // Arms out, then crossed to the shoulders, then to the head, then the hips.
-    const swings = [-92, -108, -140, -60];
-    const lifts = [54, 18, 30, 26];
-    const elbows = [16, 96, 104, 74];
+  /** Gangnam Style: one hand on the reins, the other swinging the lasso, a galloping hop. */
+  gangnam(bar, beat, energy) {
+    const gallop = Math.sin(bar * Math.PI * 8);
+    const circle = bar * Math.PI * 4;
+    const drive = 0.75 + energy * 0.45;
     return {
-      bob: -Math.abs(s) * 0.024,
-      sway: s * 0.14 * drive,
-      turn: s * 12 * DEG,
-      spineBend: 4 * DEG,
-      spineTwist: -s * 14 * DEG,
-      head: { swing: 4 * DEG, lift: s * 8 * DEG },
+      bob: Math.max(0, gallop) * 0.05 * drive,
+      sway: 0,
+      turn: 0,
+      spineBend: 6 * DEG,
+      spineTwist: Math.sin(circle) * 8 * DEG,
+      head: { swing: -6 * DEG, lift: Math.sin(circle) * 6 * DEG },
       travel: 0,
       arms: [
-        { swing: swings[stage] * DEG, lift: lifts[stage] * DEG, elbow: elbows[stage] * DEG },
-        { swing: swings[(stage + 3) % 4] * DEG, lift: lifts[(stage + 3) % 4] * DEG,
-          elbow: elbows[(stage + 3) % 4] * DEG },
+        // The lasso: overhead, the hand circling.
+        { swing: (-160 + Math.cos(circle) * 10) * DEG, lift: (36 + Math.sin(circle) * 10) * DEG,
+          elbow: 36 * DEG, flare: 0.6 },
+        // The reins: low in front, across the body.
+        { swing: -52 * DEG, lift: -14 * DEG, elbow: 70 * DEG },
       ],
       legs: [
-        { swing: (10 + s * 6) * DEG, lift: 8 * DEG, knee: (16 + Math.max(0, -s) * 14) * DEG },
-        { swing: (10 - s * 6) * DEG, lift: -8 * DEG, knee: (16 + Math.max(0, s) * 14) * DEG },
+        { swing: (6 + Math.max(0, gallop) * 26) * DEG, lift: 6 * DEG,
+          knee: (22 + Math.max(0, gallop) * 44) * DEG },
+        { swing: (6 + Math.max(0, -gallop) * 26) * DEG, lift: 6 * DEG,
+          knee: (22 + Math.max(0, -gallop) * 44) * DEG },
       ],
     };
   },
 
-  /** Vogue: sharp geometric arm frames snapping around the head. */
+  /** Macarena: the arm sequence, one position a beat, the hips rolling underneath. */
+  macarena(bar, beat, energy) {
+    // Distinct positions rather than a continuous curve: the Macarena is a
+    // sequence, and a smooth blend would erase it. Arm 1 runs a beat behind.
+    const positions = [
+      { swing: -88, lift: 14, elbow: 8, flare: 0 },     // out in front
+      { swing: -76, lift: -30, elbow: 104, flare: 0.3 }, // to the opposite shoulder
+      { swing: -160, lift: 30, elbow: 108, flare: 1 },   // behind the head
+      { swing: 6, lift: 10, elbow: 104, flare: 1 },       // on the hips
+    ];
+    const stage = Math.floor(bar * 4) % 4;
+    const at = (index) => {
+      const p = positions[index];
+      return { swing: p.swing * DEG, lift: p.lift * DEG, elbow: p.elbow * DEG, flare: p.flare };
+    };
+    const s = Math.sin(bar * Math.PI * 4);
+    return {
+      bob: -attack(beat) * 0.03,
+      sway: s * 0.08,
+      turn: 0,
+      spineBend: 2 * DEG,
+      spineTwist: 0,
+      head: { swing: 4 * DEG, lift: s * 6 * DEG },
+      travel: 0,
+      arms: [at(stage), at((stage + 3) % 4)],
+      legs: [
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, -s) * 12) * DEG },
+        { swing: 3 * DEG, lift: 5 * DEG, knee: (16 + Math.max(0, s) * 12) * DEG },
+      ],
+    };
+  },
+
+  /** Vogue: sharp frames around the face, snapping from one held pose to the next. */
   vogue(bar, beat, energy) {
     // Held positions with hard changes between them, because voguing is posing.
+    const frames = [
+      [{ swing: -172, lift: 20, elbow: 6 }, { swing: -120, lift: 60, elbow: 104, flare: 1 }],
+      [{ swing: -96, lift: 76, elbow: 6 }, { swing: -140, lift: 40, elbow: 108, flare: 1 }],
+      [{ swing: -120, lift: 60, elbow: 104, flare: 1 }, { swing: -172, lift: 20, elbow: 6 }],
+      [{ swing: -140, lift: 40, elbow: 108, flare: 1 }, { swing: -96, lift: 76, elbow: 6 }],
+    ];
     const stage = Math.floor(bar * 4) % 4;
-    const drive = 0.8 + energy * 0.5;
-    const swings = [-158, -96, -150, -70];
-    const lifts = [40, 76, -10, 60];
+    const side = stage % 2 === 0 ? 1 : -1;
     return {
-      bob: -attack(beat) * 0.035 * drive,
-      sway: (stage % 2 === 0 ? 0.10 : -0.10) * drive,
-      turn: (stage < 2 ? 24 : -24) * DEG,
-      spineBend: (stage === 1 ? -14 : 6) * DEG,
-      spineTwist: (stage < 2 ? -20 : 20) * DEG,
-      head: { swing: 12 * DEG, lift: (stage < 2 ? 18 : -18) * DEG },
+      bob: 0,
+      sway: side * 0.06,
+      turn: side * 14 * DEG,
+      spineBend: -4 * DEG,
+      spineTwist: -side * 10 * DEG,
+      head: { swing: -4 * DEG, lift: side * 14 * DEG },
       travel: 0,
-      // The frame: both arms held at hard angles around the face.
-      arms: [
-        { swing: swings[stage] * DEG, lift: lifts[stage] * DEG, elbow: 100 * DEG },
-        { swing: swings[(stage + 2) % 4] * DEG, lift: lifts[(stage + 2) % 4] * DEG,
-          elbow: 100 * DEG },
-      ],
+      arms: frames[stage].map((p) => ({
+        swing: p.swing * DEG, lift: p.lift * DEG, elbow: p.elbow * DEG, flare: p.flare ?? 0,
+      })),
       legs: [
-        { swing: 14 * DEG, lift: 14 * DEG, knee: 18 * DEG },
-        { swing: 8 * DEG, lift: -14 * DEG, knee: 30 * DEG },
+        { swing: (side > 0 ? 3 : 14) * DEG, lift: 6 * DEG, knee: (side > 0 ? 8 : 30) * DEG },
+        { swing: (side > 0 ? 14 : 3) * DEG, lift: 6 * DEG, knee: (side > 0 ? 30 : 8) * DEG },
       ],
     };
   },
 
-  /** Cabbage Patch: fists circling together in front of the chest. */
+  /** Cabbage Patch: fists together in front of the chest, circling. */
   cabbagepatch(bar, beat, energy) {
-    const around = bar * Math.PI * 2;
-    const drive = 0.75 + energy * 0.6;
+    const around = bar * Math.PI * 4;
+    const drive = 0.75 + energy * 0.4;
     return {
-      bob: -Math.abs(Math.sin(around)) * 0.03,
-      sway: Math.cos(around) * 0.10 * drive,
-      turn: Math.cos(around) * 18 * DEG,
-      spineBend: 8 * DEG,
-      spineTwist: -Math.cos(around) * 20 * DEG,
-      head: { swing: 6 * DEG, lift: Math.sin(around) * 8 * DEG },
+      bob: -attack(beat) * 0.04,
+      sway: Math.cos(around) * 0.07 * drive,
+      turn: 0,
+      spineBend: (8 + Math.sin(around) * 4) * DEG,
+      spineTwist: Math.cos(around) * 12 * DEG,
+      head: { swing: 6 * DEG, lift: Math.cos(around) * 8 * DEG },
       travel: 0,
-      // Both hands travel the same circle together, elbows fixed and wide.
+      // Both hands trace one circle: out and forward, across and back.
       arms: [
-        { swing: (-84 + Math.sin(around) * 30) * DEG * drive,
-          lift: (34 + Math.cos(around) * 16) * DEG, elbow: 92 * DEG },
-        { swing: (-84 + Math.sin(around) * 30) * DEG * drive,
-          lift: (34 - Math.cos(around) * 16) * DEG, elbow: 92 * DEG },
+        { swing: (-66 - Math.sin(around) * 18) * DEG, lift: (-6 + Math.cos(around) * 18) * DEG,
+          elbow: 100 * DEG, flare: 0.6 },
+        { swing: (-66 - Math.sin(around) * 18) * DEG, lift: (-6 - Math.cos(around) * 18) * DEG,
+          elbow: 100 * DEG, flare: 0.6 },
       ],
       legs: [
-        { swing: (12 + Math.cos(around) * 8) * DEG, lift: 8 * DEG, knee: 22 * DEG },
-        { swing: (12 - Math.cos(around) * 8) * DEG, lift: -8 * DEG, knee: 22 * DEG },
+        { swing: 4 * DEG, lift: 6 * DEG, knee: (24 + Math.max(0, Math.cos(around)) * 12) * DEG },
+        { swing: 4 * DEG, lift: 6 * DEG, knee: (24 + Math.max(0, -Math.cos(around)) * 12) * DEG },
       ],
     };
   },
 
-  /** The Sprinkler: one arm sweeping round, the other cocked behind the head. */
+  /** The Sprinkler: one hand behind the head, the other arm sweeping round in steps. */
   sprinkler(bar, beat, energy) {
-    // Sweeps out slowly and snaps back, exactly like the garden sprinkler it is
-    // named after. The asymmetry between the two is the joke and the mechanic.
-    const p = bar % 1;
-    const sweep = p < 0.75 ? p / 0.75 : 1 - (p - 0.75) / 0.25;
-    const drive = 0.8 + energy * 0.6;
+    // Sweeps out in beats and snaps back, like the garden sprinkler it is named
+    // after. The asymmetry between the two arms is the joke and the mechanic.
+    const within = (bar * 2) % 1;
+    const sweep = Math.floor(within * 4) / 3;
+    const back = within > 0.85 ? (within - 0.85) / 0.15 : 0;
+    const across = Math.min(1, sweep) * (1 - back);
     return {
-      bob: -Math.abs(Math.sin(bar * Math.PI * 2)) * 0.028,
-      sway: (sweep - 0.5) * 0.14 * drive,
-      turn: (sweep - 0.5) * 54 * DEG * drive,
+      bob: -attack(beat) * 0.04,
+      sway: (across - 0.5) * 0.08,
+      turn: (across - 0.5) * 30 * DEG,
       spineBend: 6 * DEG,
-      spineTwist: (0.5 - sweep) * 26 * DEG,
-      head: { swing: 6 * DEG, lift: (sweep - 0.5) * 20 * DEG },
+      spineTwist: 0,
+      head: { swing: 4 * DEG, lift: (across - 0.5) * 16 * DEG },
       travel: 0,
       arms: [
-        // The straight sweeping arm.
-        //
-        // The sweep stops well short of the joint's limit on purpose. Lift is
-        // amplified harder than any other angle - `reach * 1.25` - so a pose
-        // authored near the 105 degree stop arrives past it and pins there, and
-        // a pinned arm stops sweeping altogether, which is the entire move. 52
-        // degrees of authored travel is about 85 once amplified.
-        { swing: -94 * DEG, lift: (8 + sweep * 52) * DEG * drive, elbow: 22 * DEG },
-        // The cocked one, held behind the head throughout.
-        //
-        // Kept to -108 rather than the -142 it was first written at, for a
-        // reason worth knowing before authoring any new move: `from()` scales a
-        // pose's distance from rest by `reach`, which runs to about 1.7, so an
-        // arm swing authored past roughly -105 degrees lands beyond -190 and
-        // `softClamp` asymptotes it to within a degree of the -170 stop. The
-        // joint is not technically pinned - it still responds - but it has
-        // nowhere left to travel, which looks identical on screen.
-        { swing: -108 * DEG, lift: 34 * DEG, elbow: 92 * DEG },
+        { swing: -90 * DEG, lift: (-18 + across * 88) * DEG, elbow: 8 * DEG },
+        { swing: -156 * DEG, lift: 42 * DEG, elbow: 108 * DEG, flare: 1 },
       ],
       legs: [
-        { swing: 12 * DEG, lift: 10 * DEG, knee: 20 * DEG },
-        { swing: 12 * DEG, lift: -10 * DEG, knee: 24 * DEG },
+        { swing: 4 * DEG, lift: 6 * DEG, knee: 20 * DEG },
+        { swing: 10 * DEG, lift: 6 * DEG, knee: 30 * DEG },
       ],
     };
   },
 
-  /** Disco point: alternating diagonal stabs, hip to opposite corner. */
+  /** Disco point: one arm stabbing up to the far corner, then down across the body. */
   discopoint(bar, beat, energy) {
-    const s = Math.sin(bar * Math.PI * 2);
+    // Up on one beat, down on the next; the other hand on the hip throughout.
+    const up = Math.floor(bar * 4) % 2 === 0;
+    const side = Math.floor(bar * 2) % 2;
     const hit = attack(beat);
-    const drive = 0.85 + energy * 0.8;
+    const pointing = up
+      ? { swing: -164 * DEG, lift: 34 * DEG, elbow: 4 * DEG }
+      : { swing: -24 * DEG, lift: -34 * DEG, elbow: 6 * DEG };
+    const onHip = { swing: 8 * DEG, lift: 12 * DEG, elbow: 104 * DEG, flare: 1 };
+    const lean = side === 0 ? 1 : -1;
     return {
-      bob: -hit * 0.05 * drive,
-      sway: -s * 0.13 * drive,
-      turn: -s * 24 * DEG,
-      spineBend: -8 * DEG,
-      spineTwist: s * 26 * DEG * drive,
-      head: { swing: -hit * 14 * DEG, lift: s * 14 * DEG },
+      bob: -hit * 0.04,
+      sway: (up ? -lean : lean) * 0.07,
+      turn: lean * 10 * DEG,
+      spineBend: (up ? -6 : 8) * DEG,
+      spineTwist: (up ? lean : -lean) * 10 * DEG,
+      head: { swing: (up ? -12 : 10) * DEG, lift: (up ? lean : -lean) * 10 * DEG },
       travel: 0,
-      arms: [
-        // One arm stabs high across the body while the other drops to the hip,
-        // and they trade every bar.
-        { swing: (-150 + Math.max(0, -s) * 120) * DEG * drive,
-          lift: (44 + s * 20) * DEG, elbow: (14 + Math.max(0, -s) * 60) * DEG },
-        { swing: (-150 + Math.max(0, s) * 120) * DEG * drive,
-          lift: (44 - s * 20) * DEG, elbow: (14 + Math.max(0, s) * 60) * DEG },
-      ],
+      arms: side === 0 ? [pointing, onHip] : [onHip, pointing],
       legs: [
-        { swing: (14 + s * 12) * DEG * drive, lift: 12 * DEG, knee: (22 - s * 8) * DEG },
-        { swing: (14 - s * 12) * DEG * drive, lift: -12 * DEG, knee: (22 + s * 8) * DEG },
+        { swing: 4 * DEG, lift: (side === 0 ? 10 : 5) * DEG, knee: (side === 0 ? 8 : 22) * DEG },
+        { swing: 4 * DEG, lift: (side === 1 ? 10 : 5) * DEG, knee: (side === 1 ? 8 : 22) * DEG },
       ],
     };
   },
 
-  /** Two-step: side, together, side - the club default. */
+  /** Two-step: side, together, side - the club default, fingers snapping at the hips. */
   twostep(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 2);
-    const drive = 0.7 + energy * 0.6;
+    const out = [Math.max(0, s), Math.max(0, -s)];
+    const drive = 0.7 + energy * 0.5;
     return {
-      bob: -attack(beat) * 0.035 * drive,
-      sway: s * 0.15 * drive,
-      turn: s * 14 * DEG,
+      bob: -attack(beat) * 0.04 * drive,
+      sway: s * 0.10 * drive,
+      turn: s * 8 * DEG,
       spineBend: 5 * DEG,
-      spineTwist: -s * 16 * DEG,
-      head: { swing: 5 * DEG, lift: s * 10 * DEG },
-      travel: s * 0.16 * drive,
+      spineTwist: -s * 10 * DEG,
+      head: { swing: attack(beat) * 6 * DEG, lift: s * 8 * DEG },
+      travel: s * 0.3 * drive,
       arms: [
-        { swing: (-46 - s * 22) * DEG * drive, lift: (24 + s * 10) * DEG, elbow: 70 * DEG },
-        { swing: (-46 + s * 22) * DEG * drive, lift: (24 - s * 10) * DEG, elbow: 70 * DEG },
+        { swing: (-44 + s * 16) * DEG, lift: 32 * DEG, elbow: (86 + attack(beat) * 10) * DEG },
+        { swing: (-44 - s * 16) * DEG, lift: 32 * DEG, elbow: (86 + attack(beat) * 10) * DEG },
       ],
-      // The trailing foot closes to the leading one rather than passing it.
-      legs: [
-        { swing: (12 + Math.max(0, s) * 22) * DEG * drive, lift: (10 + s * 8) * DEG,
-          knee: (18 + Math.max(0, -s) * 12) * DEG },
-        { swing: (12 + Math.max(0, -s) * 22) * DEG * drive, lift: (-10 + s * 8) * DEG,
-          knee: (18 + Math.max(0, s) * 12) * DEG },
-      ],
+      legs: out.map((stepping) => ({
+        swing: 3 * DEG, lift: (5 + stepping * 9 * drive) * DEG, knee: (14 + (1 - stepping) * 12) * DEG,
+      })),
     };
   },
 
-  /** Melbourne shuffle: fast heel-toe running steps, arms low and tight. */
+  /** Melbourne shuffle: fast heel-toe steps, one foot kicking out low as the other slides. */
   shuffle(bar, beat, energy) {
     // Twice the rate of an ordinary step: the shuffle is defined by being faster
     // than the music appears to demand.
     const s = Math.sin(bar * Math.PI * 8);
-    const drive = 0.9 + energy * 0.9;
+    const drive = 0.75 + energy * 0.45;
+    const leg = (k) => ({
+      swing: (k > 0 ? k * 34 : k * 12) * drive * DEG,
+      lift: (4 + Math.max(0, k) * 4) * DEG,
+      knee: (14 + Math.max(0, -k) * 26) * DEG,
+    });
     return {
-      bob: -Math.abs(s) * 0.035 * drive,
+      bob: -Math.abs(s) * 0.03,
       sway: s * 0.04,
-      turn: s * 8 * DEG,
-      spineBend: 10 * DEG,
-      spineTwist: -s * 10 * DEG,
-      head: { swing: 8 * DEG, lift: 0 },
-      travel: Math.sin(bar * Math.PI * 2) * 0.20 * drive,
-      // Arms stay low and close - all the work is below the waist.
+      turn: 0,
+      spineBend: 8 * DEG,
+      spineTwist: -s * 8 * DEG,
+      head: { swing: 6 * DEG, lift: 0 },
+      travel: 0,
       arms: [
-        { swing: (-30 - s * 16) * DEG, lift: 20 * DEG, elbow: 62 * DEG },
-        { swing: (-30 + s * 16) * DEG, lift: 20 * DEG, elbow: 62 * DEG },
+        { swing: (-34 - s * 22) * DEG, lift: 26 * DEG, elbow: 84 * DEG },
+        { swing: (-34 + s * 22) * DEG, lift: 26 * DEG, elbow: 84 * DEG },
       ],
-      legs: [
-        { swing: (6 + s * 40) * DEG * drive, lift: 6 * DEG, knee: (14 + Math.max(0, s) * 40) * DEG },
-        { swing: (6 - s * 40) * DEG * drive, lift: -6 * DEG, knee: (14 + Math.max(0, -s) * 40) * DEG },
-      ],
+      legs: [leg(s), leg(-s)],
     };
   },
 
-  /** Y.M.C.A.: the four letters, one per beat. */
+  /** Y.M.C.A.: the four letters, one a beat. */
   ymca(bar, beat, energy) {
-    const letter = Math.floor(bar * 4) % 4;
-    const drive = 0.85 + energy * 0.6;
-    // Y: both arms up and out. M: elbows down, hands to shoulders. C: both arms
-    // swung to one side. A: arms up and together over the head.
-    //
-    // Every swing here stays inside about -105 degrees, and the elbows clear of
-    // both stops. See the note in `sprinkler`: `from()` multiplies a pose's
-    // distance from rest by up to 1.7, so anything authored nearer the limits
-    // arrives with no travel left and the letters stop being distinguishable
-    // from one another - which for this move is the entire point of it.
-    const left = [
-      { swing: -102, lift: 58, elbow: 22 },
-      { swing: -92, lift: 28, elbow: 92 },
-      { swing: -100, lift: 68, elbow: 44 },
-      { swing: -104, lift: 14, elbow: 24 },
-    ][letter];
-    const right = [
-      { swing: -102, lift: 58, elbow: 22 },
-      { swing: -92, lift: 28, elbow: 92 },
-      { swing: -74, lift: -30, elbow: 74 },
-      { swing: -104, lift: 14, elbow: 24 },
-    ][letter];
+    // Y: arms up and out. M: hands to the top of the head, elbows wide.
+    // C: both arms curved to one side. A: arms up and together.
+    const letters = [
+      [{ swing: -168, lift: 32, elbow: 4 }, { swing: -168, lift: 32, elbow: 4 }],
+      [{ swing: -150, lift: 58, elbow: 110, flare: 1 }, { swing: -150, lift: 58, elbow: 110, flare: 1 }],
+      [{ swing: -146, lift: 62, elbow: 46 }, { swing: -120, lift: -16, elbow: 58 }],
+      [{ swing: -176, lift: 6, elbow: 10 }, { swing: -176, lift: 6, elbow: 10 }],
+    ];
+    const stage = Math.floor(bar * 4) % 4;
     return {
-      bob: attack(beat) * 0.06 * drive,
-      sway: (letter === 2 ? 0.12 : 0) * drive,
-      turn: (letter === 2 ? 20 : 0) * DEG,
-      spineBend: -10 * DEG,
-      spineTwist: (letter === 2 ? -16 : 0) * DEG,
-      head: { swing: -12 * DEG, lift: 0 },
+      bob: -attack(beat) * 0.04,
+      sway: stage === 2 ? 0.06 : 0,
+      turn: 0,
+      spineBend: -4 * DEG,
+      spineTwist: 0,
+      head: { swing: -8 * DEG, lift: stage === 2 ? -10 * DEG : 0 },
       travel: 0,
-      arms: [
-        { swing: left.swing * DEG, lift: left.lift * DEG, elbow: left.elbow * DEG },
-        { swing: right.swing * DEG, lift: right.lift * DEG, elbow: right.elbow * DEG },
-      ],
+      arms: letters[stage].map((p) => ({
+        swing: p.swing * DEG, lift: p.lift * DEG, elbow: p.elbow * DEG, flare: p.flare ?? 0,
+      })),
       legs: [
-        { swing: 14 * DEG, lift: 12 * DEG, knee: 18 * DEG },
-        { swing: 14 * DEG, lift: -12 * DEG, knee: 18 * DEG },
+        { swing: 3 * DEG, lift: 6 * DEG, knee: (12 + attack(beat) * 12) * DEG },
+        { swing: 3 * DEG, lift: 6 * DEG, knee: (12 + attack(beat) * 12) * DEG },
       ],
     };
   },
 
-  /** Salsa basic: a forward-back rock step with the hips leading. */
+  /** Salsa basic: a rock step forward and back on one-two-three, the hips leading. */
   salsa(bar, beat, energy) {
-    const s = Math.sin(bar * Math.PI * 2);
-    const quick = Math.sin(bar * Math.PI * 4);
-    const drive = 0.75 + energy * 0.6;
+    // Quick-quick-slow across the bar, the fourth beat held.
+    const count = bar * 4;
+    const phase = count < 3 ? Math.sin((count / 3) * Math.PI * 2) : 0;
+    const hips = Math.sin(bar * Math.PI * 4);
+    const drive = 0.75 + energy * 0.45;
     return {
-      bob: -Math.abs(quick) * 0.030 * drive,
-      // Cuban motion: the hips do most of the work, well ahead of the feet.
-      sway: s * 0.18 * drive,
-      turn: s * 20 * DEG,
+      bob: -attack(beat) * 0.03,
+      sway: hips * 0.09 * drive,
+      turn: hips * 8 * DEG,
       spineBend: 4 * DEG,
-      spineTwist: -s * 24 * DEG * drive,
-      head: { swing: 4 * DEG, lift: s * 12 * DEG },
+      spineTwist: -hips * 10 * DEG,
+      head: { swing: 2 * DEG, lift: hips * 8 * DEG },
       travel: 0,
-      // Frame held: elbows out, forearms forward, as if holding a partner.
+      // The frame held: elbows out, forearms forward, as if holding a partner.
       arms: [
-        { swing: -80 * DEG, lift: (46 + s * 8) * DEG, elbow: 88 * DEG },
-        { swing: -80 * DEG, lift: (46 - s * 8) * DEG, elbow: 88 * DEG },
+        { swing: -58 * DEG, lift: 40 * DEG, elbow: 96 * DEG, flare: 0.7 },
+        { swing: -58 * DEG, lift: 40 * DEG, elbow: 96 * DEG, flare: 0.7 },
       ],
       legs: [
-        { swing: (12 + quick * 30) * DEG * drive, lift: 9 * DEG,
-          knee: (18 + Math.max(0, -quick) * 20) * DEG },
-        { swing: (12 - quick * 30) * DEG * drive, lift: -9 * DEG,
-          knee: (18 + Math.max(0, quick) * 20) * DEG },
+        { swing: (3 + phase * 18 * drive) * DEG, lift: 5 * DEG,
+          knee: (14 + Math.max(0, -phase) * 14) * DEG },
+        { swing: (3 - phase * 12 * drive) * DEG, lift: 5 * DEG,
+          knee: (14 + Math.max(0, phase) * 14) * DEG },
       ],
     };
   },
+
   /**
    * Gentle weight shift, for passages that are quiet but still playing.
-   *
-   * The move the theme tables had been naming for some time without anyone
-   * having authored it - `THEME_ROUTINES` listed `sway` for romance and
-   * melancholy, `MOVES` did not have it, and the lookup threw.
    *
    * It exists because the only alternative for a quiet section was `idle`, which
    * is small enough that figures read as having stopped altogether. Measured
@@ -2034,56 +1966,51 @@ const MOVES = {
    *
    * Everything is driven from the hips, because that is what a sway is: a weight
    * transfer the rest of the body follows. The arms hang and drift rather than
-   * gesturing, and the knees soften alternately to take the load - the near leg
-   * straightens as the hips ride over it while the far one bends.
+   * gesturing, and the knees soften alternately to take the load.
    */
   sway(bar, beat, energy) {
     const s = Math.sin(bar * Math.PI * 2);
     const drive = 0.7 + energy * 0.5;
     return {
-      bob: -swell(beat) * 0.018 - Math.abs(s) * 0.012,
-      sway: s * 0.16 * drive,
-      turn: s * 10 * DEG,
+      bob: -swell(beat) * 0.015 - Math.abs(s) * 0.01,
+      sway: s * 0.13 * drive,
+      turn: s * 8 * DEG,
       spineBend: 3 * DEG,
-      // Shoulders counter the hips, which is what keeps a sway balanced rather
-      // than leaning.
-      spineTwist: -s * 12 * DEG,
-      head: { swing: 4 * DEG, lift: s * 10 * DEG },
+      // Shoulders counter the hips, which keeps a sway balanced rather than leaning.
+      spineTwist: -s * 10 * DEG,
+      head: { swing: 4 * DEG, lift: s * 8 * DEG },
       // No travel at all. A quiet section that wanders across the stage reads as
       // restlessness, which is the opposite of what this is for.
       travel: 0,
       arms: [
-        { swing: (-22 - s * 16) * DEG * drive, lift: (14 + s * 8) * DEG,
-          elbow: (34 + s * 14) * DEG },
-        { swing: (-22 + s * 16) * DEG * drive, lift: (14 - s * 8) * DEG,
-          elbow: (34 - s * 14) * DEG },
+        { swing: (-14 - s * 14) * DEG, lift: (20 + s * 6) * DEG, elbow: (30 + s * 12) * DEG },
+        { swing: (-14 + s * 14) * DEG, lift: (20 - s * 6) * DEG, elbow: (30 - s * 12) * DEG },
       ],
       legs: [
-        { swing: (10 + s * 8) * DEG, lift: 7 * DEG,
-          knee: (16 + Math.max(0, -s) * 14) * DEG },
-        { swing: (10 - s * 8) * DEG, lift: -7 * DEG,
-          knee: (16 + Math.max(0, s) * 14) * DEG },
+        { swing: (3 + s * 5) * DEG, lift: 5 * DEG, knee: (14 + Math.max(0, -s) * 14) * DEG },
+        { swing: (3 - s * 5) * DEG, lift: 5 * DEG, knee: (14 + Math.max(0, s) * 14) * DEG },
       ],
     };
   },
 
-  idle(bar, beat, energy) {
+  /** Near-stillness: breathing, a small shift, arms at rest. Only for near-silence. */
+  idle(bar) {
     const s = Math.sin(bar * Math.PI * 2);
     return {
-      bob: -swell(beat) * 0.02,
-      sway: s * 0.05,
-      turn: s * 12 * DEG,
+      bob: -Math.abs(s) * 0.008,
+      sway: s * 0.04,
+      turn: s * 6 * DEG,
       spineBend: 3 * DEG,
-      spineTwist: -s * 8 * DEG,
-      head: { swing: s * 7 * DEG, lift: 0 },
-      travel: s * 0.10,
+      spineTwist: -s * 5 * DEG,
+      head: { swing: 4 * DEG, lift: s * 5 * DEG },
+      travel: 0,
       arms: [
-        { swing: (-14 - s * 12) * DEG, lift: 12 * DEG, elbow: (28 + s * 12) * DEG },
-        { swing: (-14 + s * 12) * DEG, lift: -12 * DEG, elbow: (28 - s * 12) * DEG },
+        { swing: (-10 - s * 6) * DEG, lift: 20 * DEG, elbow: 22 * DEG },
+        { swing: (-10 + s * 6) * DEG, lift: 20 * DEG, elbow: 22 * DEG },
       ],
       legs: [
-        { swing: (8 + s * 6) * DEG, lift: 5 * DEG, knee: 12 * DEG },
-        { swing: (8 - s * 6) * DEG, lift: -5 * DEG, knee: 12 * DEG },
+        { swing: 2 * DEG, lift: 5 * DEG, knee: 10 * DEG },
+        { swing: 2 * DEG, lift: 5 * DEG, knee: 10 * DEG },
       ],
     };
   },
@@ -2113,10 +2040,10 @@ const QUIET_ENERGY = 0.20;
 /**
  * Pick a move for a section from its measured character.
  *
- * Stands in for the language-model choreography pass. Once `score.choreography`
- * exists it takes precedence, and this becomes the fallback. Worth noting that
- * for every track analysed so far this *is* the choreography: none of the cached
- * scores carry lyrics, so the theme-driven path has never run.
+ * The fallback for a supplied choreography that names no move this file knows.
+ * Every other track is danced from `planChoreography`, which replaced this as
+ * the source of the dance: chosen by section index, it walked the same list in
+ * the same order for every song.
  */
 export function moveForSection(section) {
   const { energy_mean: energy, brightness_mean: brightness, index } = section;
@@ -2131,6 +2058,405 @@ export function moveForSection(section) {
   if (energy > 0.50 && brightness > 0.35) return big[index % big.length];
   if (energy > 0.38) return index % 5 === 4 ? 'spin' : big[index % big.length];
   return mid[index % mid.length];
+}
+
+// --- Choreography plan --------------------------------------------------------
+
+/**
+ * Dance styles: one per song, so a whole track reads as one piece of
+ * choreography rather than a shuffle of unrelated moves.
+ *
+ * Each style has three tiers of intensity and a hook - the signature move its
+ * choruses come back to, which is what makes a chorus recognisable the second
+ * time it arrives. Between them the styles cover every move in {@link MOVES}
+ * except `idle`, reserved for near-silence, and `sing`, which is the lead's.
+ *
+ * There is no swing or Latin style, though the moves are here. Nothing in the
+ * analysis can tell when a song suits a Charleston or a salsa, and as a style it
+ * kept landing on the wrong songs - a metal track, then a hip-hop mashup, each
+ * with a salsa hook. As moves inside other styles they read as flavour; as the
+ * whole dance they read as a mistake.
+ */
+const STYLES = {
+  pop: {
+    low: ['step', 'sway', 'twostep'],
+    mid: ['clap', 'point', 'wave', 'shimmy', 'macarena', 'slide', 'twist'],
+    high: ['reach', 'jump', 'floss', 'discopoint', 'spin', 'charleston'],
+    hook: ['clap', 'floss', 'macarena'],
+    drop: 'jump',
+  },
+  groove: {
+    low: ['sway', 'twostep', 'groove'],
+    mid: ['dougie', 'groove', 'shimmy', 'point', 'sprinkler', 'moonwalk'],
+    high: ['runningman', 'cabbagepatch', 'jump', 'floss'],
+    hook: ['dougie', 'cabbagepatch', 'runningman'],
+    drop: 'jump',
+  },
+  disco: {
+    low: ['step', 'twostep', 'sway'],
+    mid: ['discopoint', 'shimmy', 'moonwalk', 'groove', 'vogue', 'robot', 'salsa'],
+    high: ['discopoint', 'spin', 'ymca', 'vogue', 'jump'],
+    hook: ['discopoint', 'ymca', 'vogue'],
+    drop: 'spin',
+  },
+  club: {
+    low: ['twostep', 'groove', 'step'],
+    mid: ['shuffle', 'runningman', 'slide', 'robot', 'twostep'],
+    high: ['jump', 'shuffle', 'reach', 'runningman', 'gangnam'],
+    hook: ['shuffle', 'runningman', 'gangnam'],
+    drop: 'jump',
+  },
+  rock: {
+    low: ['step', 'march', 'sway'],
+    mid: ['headbang', 'march', 'kick', 'point', 'run', 'charleston'],
+    high: ['jump', 'headbang', 'kick', 'reach'],
+    hook: ['headbang', 'jump', 'kick'],
+    drop: 'jump',
+  },
+  ballad: {
+    low: ['sway', 'step', 'twostep'],
+    mid: ['wave', 'sway', 'groove', 'step'],
+    high: ['reach', 'wave', 'spin'],
+    hook: ['wave', 'reach'],
+    drop: 'reach',
+  },
+};
+
+/**
+ * Which styles suit a felt tempo, most natural first.
+ *
+ * Tempo is the one fact about genre the analysis is sure of - confidence ran
+ * 0.96 to 0.98 across the cached tracks - so it narrows the field, and the
+ * audio's character and the song's seed choose within it.
+ *
+ * @param {number} bpm Felt tempo; see {@link songCharacter}.
+ * @returns {string[]}
+ */
+function stylesForTempo(bpm) {
+  if (bpm < 92) return ['ballad', 'groove'];
+  if (bpm < 112) return ['groove', 'pop', 'disco'];
+  if (bpm < 124) return ['disco', 'pop', 'groove'];
+  if (bpm < 136) return ['club', 'disco', 'pop'];
+  if (bpm < 150) return ['rock', 'pop', 'club'];
+  return ['rock', 'club'];
+}
+
+/** FNV-1a: a stable 32-bit hash of a string. */
+function hashString(text) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * A small seeded generator, so a song's choreography is a property of the
+ * song: every viewer gets the same dance, and a seek lands in the same routine.
+ *
+ * @param {number} seed
+ * @returns {() => number} Uniform in [0, 1).
+ */
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Mean of a lane, or a fallback when the lane is missing. */
+function laneMean(lane, fallback) {
+  if (!Array.isArray(lane) || lane.length === 0) return fallback;
+  let sum = 0;
+  for (const value of lane) sum += value;
+  return sum / lane.length;
+}
+
+/**
+ * Where a value sits among the songs this was calibrated on: 0.25 at their
+ * lower quartile, 0.75 at their upper, clamped to 0-1.
+ *
+ * The raw lanes span narrow ranges - brightness ran 0.31 to 0.55 across the
+ * twenty-two cached tracks, punch 0.13 to 0.26 - so a fit written in raw units
+ * compares numbers on different scales, and one style simply wins everywhere.
+ */
+function placed(value, [q25, q75]) {
+  return Math.min(1, Math.max(0, 0.25 + ((value - q25) / Math.max(1e-6, q75 - q25)) * 0.5));
+}
+
+/** Quartiles of each trait over the twenty-two cached tracks, 25 September 2026. */
+const TRAIT_QUARTILES = {
+  energy: [0.390, 0.530],
+  brightness: [0.381, 0.473],
+  punch: [0.160, 0.191],
+  bass: [0.290, 0.353],
+  range: [0.231, 0.546],
+};
+
+/**
+ * The song's character: the few numbers that decide how it should be danced,
+ * each placed against the calibration songs, and the tempo it is *felt* at.
+ *
+ * ## Felt tempo
+ *
+ * Beat tracking reports a slow groove at double time as readily as not: two
+ * R&B tracks felt at 67 and 70 came back as 134 and 140, and were planned as
+ * rock - headbanging - which is the wrong dance entirely. What separates them
+ * from genuinely fast music is that they are quiet, or dark with a heavy low
+ * end; the fast rock tracks in the cache are bright and loud. So a fast song
+ * that is quiet, or dark and bass-heavy, is danced at half its tracked tempo.
+ *
+ * @param {object} score
+ */
+export function songCharacter(score) {
+  const sections = score.sections ?? [];
+  const energies = sections.map((section) => section.energy_mean);
+  const lanes = score.lanes ?? {};
+  const bassLane = laneMean(lanes.bass, 0.3);
+  const raw = {
+    energy: laneMean(lanes.energy, 0.45),
+    brightness: laneMean(lanes.brightness, 0.42),
+    punch: laneMean(lanes.punch, 0.18),
+    // Share of the band energy in the lows: what separates a groove built on
+    // the bass from a guitar song at the same tempo.
+    bass: bassLane / Math.max(0.05, bassLane + laneMean(lanes.mid, 0.3) + laneMean(lanes.treble, 0.2)),
+    range: energies.length ? Math.max(...energies) - Math.min(...energies) : 0.38,
+  };
+  const bpm = score.timing?.tempo_bpm > 0 ? score.timing.tempo_bpm : 120;
+  const halfTime = bpm >= 128 && (raw.energy < 0.42
+    || (raw.brightness < 0.43 && (raw.bass >= 0.36 || bpm >= 160)));
+  return {
+    bpm,
+    feltBpm: halfTime ? bpm / 2 : bpm,
+    raw,
+    energy: placed(raw.energy, TRAIT_QUARTILES.energy),
+    brightness: placed(raw.brightness, TRAIT_QUARTILES.brightness),
+    punch: placed(raw.punch, TRAIT_QUARTILES.punch),
+    bass: placed(raw.bass, TRAIT_QUARTILES.bass),
+    range: placed(raw.range, TRAIT_QUARTILES.range),
+  };
+}
+
+/**
+ * How well a style fits a song's character, 0-1.
+ *
+ * Deliberately coarse. These are tendencies, not genre detection - which the
+ * analysis cannot do - and a song landing on a neighbouring style still gets a
+ * coherent dance; it only has to be a plausible one. Every trait here is placed
+ * 0-1 against the calibration songs, so the terms are comparable.
+ */
+function styleFit(style, character) {
+  const { energy, brightness, punch, bass, range } = character;
+  switch (style) {
+    // A ballad is soft as well as quiet. Weighted on loudness alone, three
+    // cached tracks mastered quietly - a hip-hop classic, a dancehall riddim
+    // and a slow rap single, all with heavy drums or bass - came out as ballads
+    // and were danced with waves and sways.
+    case 'ballad': return (1 - energy) * 0.35 + (1 - punch) * 0.45 + (1 - bass) * 0.2;
+    case 'groove': return bass * 0.4 + punch * 0.35 + (1 - brightness) * 0.25;
+    case 'disco': return brightness * 0.3 + range * 0.3 + punch * 0.2 + (1 - bass) * 0.2;
+    // Club is told from rock by its low end and its steadiness: drums punch as
+    // hard in both, but club music carries more bass and changes level less.
+    case 'club': return energy * 0.3 + punch * 0.2 + bass * 0.4 + (1 - range) * 0.1;
+    case 'rock': return energy * 0.35 + brightness * 0.3 + (1 - bass) * 0.2 + range * 0.15;
+    case 'pop': return 0.5 - Math.abs(energy - 0.5) * 0.4 + brightness * 0.2;
+    default: return 0.5;
+  }
+}
+
+/**
+ * Choose the song's style: the best fit for its felt tempo and character, with
+ * the seed choosing between styles that fit nearly as well. Without the seed,
+ * every song at a similar tempo and loudness would dance alike, which is the
+ * problem this replaces - eight of twenty-two cached songs opened with the same
+ * three moves.
+ *
+ * @param {ReturnType<typeof songCharacter>} character
+ * @param {() => number} random
+ * @returns {string}
+ */
+function styleFor(character, random) {
+  const candidates = stylesForTempo(character.feltBpm)
+    .map((name, rank) => ({ name, fit: styleFit(name, character) - rank * 0.03 }))
+    .sort((a, b) => b.fit - a.fit);
+  const close = candidates.filter((c) => c.fit >= candidates[0].fit - 0.04);
+  return close[Math.floor(random() * close.length)].name;
+}
+
+/**
+ * Each section's part in the song, from how it stands against the rest of it.
+ *
+ * The analysis does not label sections, but their levels carry the shape a
+ * listener hears: one cached track's energies run 0.26, 0.57, 0.38, 0.68, 0.46,
+ * 0.27 - intro, chorus, verse, bigger chorus, bridge, outro.
+ *
+ * Judged against the song's *typical* section, the median, not its extremes.
+ * Against the extremes, one near-silent ending stretched the range until every
+ * other section counted as loud: a disco track came out as ten choruses in a
+ * row. A chorus has to stand clear of the typical section, by at least 0.04 and
+ * by half the distance to the song's top fifth.
+ *
+ * Standing out is loudness plus half the brightness. A chorus is often brighter
+ * and denser rather than louder, and on loudness alone five of the twenty-two
+ * cached songs came out as nothing but verses, so their dancers never reached
+ * the hook. A song that still shows fewer than one chorus in five playing
+ * sections has its brightest, loudest sections promoted until it does.
+ *
+ * @param {object[]} sections
+ * @returns {{role: string, intensity: number}[]}
+ */
+export function sectionRoles(sections) {
+  const lift = (section) => section.energy_mean + section.brightness_mean * 0.5;
+  const playingSections = sections.filter((section) => section.energy_mean >= CALM_ENERGY);
+  const lifts = playingSections.map(lift).sort((a, b) => a - b);
+  const energies = playingSections.map((section) => section.energy_mean).sort((a, b) => a - b);
+  const at = (values, p) => (values.length
+    ? values[Math.min(values.length - 1, Math.round(p * (values.length - 1)))]
+    : 0);
+  const median = at(lifts, 0.5);
+  const chorusAt = Math.max(median + 0.04, median + (at(lifts, 0.8) - median) * 0.5);
+  const quietAt = Math.min(median - 0.04, median - (median - at(lifts, 0.2)) * 0.5);
+  const energyMedian = at(energies, 0.5);
+  const spread = Math.max(0.1, at(energies, 0.8) - at(energies, 0.2));
+
+  const roles = [];
+  sections.forEach((section, i) => {
+    const energy = section.energy_mean;
+    // Mostly relative, partly absolute, so a quiet song's chorus is its peak
+    // without being danced as hard as a loud song's. Near-silence is danced at
+    // nothing: judged against the playing sections it can come out above the
+    // middle, and a figure bracing through a silence reads as a glitch.
+    const relative = Math.min(1, Math.max(0, 0.5 + (energy - energyMedian) / spread));
+    const absolute = Math.min(1, Math.max(0, (energy - 0.12) / 0.6));
+    const intensity = energy < CALM_ENERGY ? 0 : relative * 0.6 + absolute * 0.4;
+    const level = lift(section);
+    const previous = sections[i - 1];
+    const next = sections[i + 1];
+    const before = roles[i - 1]?.role;
+    let role;
+    if (energy < CALM_ENERGY) role = 'silence';
+    else if (i === 0 && level < chorusAt) role = 'intro';
+    else if (i === sections.length - 1 && level < chorusAt) role = 'outro';
+    else if (level >= chorusAt) {
+      // A drop is a chorus *arriving*: markedly louder than what came before,
+      // and not simply the next section of a chorus already under way.
+      role = previous && energy - previous.energy_mean > 0.12
+        && before !== 'chorus' && before !== 'drop' ? 'drop' : 'chorus';
+    } else if (next && lift(next) >= chorusAt && level >= quietAt) role = 'build';
+    else if (level <= quietAt && ['chorus', 'drop'].includes(before)) role = 'breakdown';
+    else role = 'verse';
+    roles.push({ role, intensity });
+  });
+
+  // Every song reaches its hook: promote the strongest verses if too few
+  // sections stood out on their own.
+  const wanted = playingSections.length >= 3 ? Math.round(playingSections.length * 0.2) : 0;
+  let have = roles.filter(({ role }) => role === 'chorus' || role === 'drop').length;
+  const candidates = sections
+    .map((section, i) => ({ i, level: lift(section) }))
+    .filter(({ i }) => roles[i].role === 'verse' || roles[i].role === 'build')
+    .sort((a, b) => b.level - a.level);
+  for (const { i } of candidates) {
+    if (have >= wanted) break;
+    roles[i].role = 'chorus';
+    have += 1;
+  }
+  // A build only means something before a chorus; re-derive after promotion.
+  roles.forEach((entry, i) => {
+    const next = roles[i + 1]?.role;
+    if (entry.role === 'verse' && (next === 'chorus' || next === 'drop') && i > 0
+      && lift(sections[i]) >= quietAt) entry.role = 'build';
+  });
+  return roles;
+}
+
+/**
+ * The shape of each role's routine, one entry per phrase, cycling.
+ *
+ * `low`, `mid` and `high` draw from the style's tiers; `hook` is the song's
+ * signature move and `drop` its impact move. A chorus returns to its hook every
+ * other phrase, a build climbs a tier as it goes, and a breakdown stays down -
+ * which is the arc of the song danced rather than described.
+ */
+const ROLE_SHAPES = {
+  intro: ['low', 'low', 'mid', 'low'],
+  verse: ['mid', 'low', 'mid', 'mid'],
+  build: ['mid', 'mid', 'high', 'high'],
+  chorus: ['hook', 'high', 'hook', 'high'],
+  drop: ['drop', 'hook', 'high', 'hook'],
+  breakdown: ['low', 'low', 'low', 'low'],
+  outro: ['low', 'mid', 'low', 'low'],
+  silence: ['idle'],
+};
+
+/**
+ * Plan a song's dance from its analysis, once.
+ *
+ * Replaces choosing each section's move from its *index*, which walked the same
+ * list in the same order for every song: section 0 of any mid-energy track was
+ * always `step`, and eight of the thirty-four moves were never chosen at all.
+ *
+ * - The song gets one style, from its felt tempo and character, seeded per song.
+ * - Each section gets a role - intro, verse, build, chorus, drop, breakdown,
+ *   outro - from its energy against the song's typical level.
+ * - Sections with the same role share one routine. The second chorus is danced
+ *   like the first, which more than anything makes choreography read as meant.
+ * - The seed is the song's identity, so every viewer sees the same dance.
+ *
+ * @param {object} score
+ * @returns {{style: string, hook: string, sections: {role: string,
+ *   intensity: number, routine: string[]}[]}}
+ */
+export function planChoreography(score) {
+  const sections = score.sections ?? [];
+  const identity = score.source?.provider_id ?? score.source?.title
+    ?? `${score.source?.duration_sec ?? score.analysis?.analysed_duration_sec ?? 0}`;
+  const random = seededRandom(hashString(String(identity)));
+  const style = styleFor(songCharacter(score), random);
+  const vocabulary = STYLES[style];
+
+  // Drawn without repeating within a routine where the tier allows it.
+  const draw = (tier, taken) => {
+    const pool = vocabulary[tier].filter((move) => !taken.has(move));
+    const from = pool.length ? pool : vocabulary[tier];
+    return from[Math.floor(random() * from.length)];
+  };
+  const hook = vocabulary.hook[Math.floor(random() * vocabulary.hook.length)];
+
+  const byRole = new Map();
+  const routineFor = (role) => {
+    if (byRole.has(role)) return byRole.get(role);
+    const shape = ROLE_SHAPES[role];
+    const taken = new Set([hook]);
+    const picked = {};
+    const routine = shape.map((slot, i) => {
+      if (slot === 'idle') return 'idle';
+      if (slot === 'hook') return hook;
+      if (slot === 'drop') return vocabulary.drop;
+      // The same slot twice in a shape alternates between two moves, so a verse
+      // goes back and forth rather than wandering through four.
+      const key = `${slot}${shape.slice(0, i).filter((other) => other === slot).length % 2}`;
+      if (!picked[key]) {
+        picked[key] = draw(slot, taken);
+        taken.add(picked[key]);
+      }
+      return picked[key];
+    }).filter((move) => MOVES[move]);
+    byRole.set(role, routine.length ? routine : ['step']);
+    return byRole.get(role);
+  };
+
+  return {
+    style,
+    hook,
+    sections: sectionRoles(sections)
+      .map(({ role, intensity }) => ({ role, intensity, routine: routineFor(role) })),
+  };
 }
 
 /**
@@ -2172,10 +2498,12 @@ export const PHRASE_BARS = 8;
  * read as deliberate rather than as a jump.
  *
  * Measured effect on a held `groove` at energy 0.5: the arm swing range moves
- * from 117.3 degrees early in the phrase to 128.2 at its peak, and the legs from
- * 78.4 to 88.9 - about 9% and 13%. Deliberately modest. Pushing the range wider
- * makes the figures visibly pulse in and out rather than reading as a phrase
- * that grows, which is a worse artefact than the flatness it replaced.
+ * from 48.0 degrees early in the phrase to 57.0 at its peak, and the legs from
+ * 27.6 to 31.9 - about 19% and 16%. It was 9% and 13% when the pose springs
+ * smeared most of every move away; the drawn pose follows the move now, so the
+ * same arc shows. Deliberately modest. Pushing the range wider makes the
+ * figures visibly pulse in and out rather than reading as a phrase that grows,
+ * which is a worse artefact than the flatness it replaced.
  *
  * @param {number} t Position within the phrase, 0-1.
  * @returns {{intensity: number, settle: number}}
@@ -2242,45 +2570,6 @@ const TRANSITION_BEATS = 2;
  */
 const CONNECTORS = ['step', 'groove', 'slide', 'sway'];
 
-/**
- * Routines chosen by what a section's lyrics are about.
- *
- * This is the point of transcribing at all. Audio features say how loud and
- * bright a passage is; they cannot distinguish a defiant chorus from a jubilant
- * one at the same volume. The theme can, and that difference is the whole
- * character of the dance.
- *
- * Falls back to the energy-based routines below whenever there are no lyrics,
- * which covers every instrumental and every track where transcription was
- * unavailable.
- */
-const THEME_ROUTINES = {
-  motion: [
-    ['run', 'run', 'slide', 'march'],
-    ['march', 'run', 'kick', 'slide'],
-  ],
-  romance: [
-    ['sway', 'wave', 'step', 'sing'],
-    ['wave', 'sway', 'sing', 'step'],
-  ],
-  defiance: [
-    ['march', 'point', 'headbang', 'kick'],
-    ['headbang', 'point', 'march', 'jump'],
-  ],
-  celebration: [
-    ['reach', 'jump', 'clap', 'floss'],
-    ['clap', 'reach', 'shimmy', 'jump'],
-  ],
-  melancholy: [
-    ['idle', 'sway', 'wave', 'idle'],
-    ['sway', 'idle', 'sing', 'sway'],
-  ],
-  aspiration: [
-    ['reach', 'wave', 'reach', 'spin'],
-    ['spin', 'reach', 'sing', 'wave'],
-  ],
-};
-
 /** Deterministic move sequences keyed by their opening move. */
 const ROUTINES = {
   idle: ['idle', 'wave', 'idle', 'sing'],
@@ -2342,15 +2631,17 @@ function routineForSection(section, planned) {
  * The move for one performer within a section.
  *
  * The lead sings while everyone else dances, which is what turns a row of
- * identical figures into a group with a front person. On quiet sections nobody
+ * identical figures into a group with a front person - and joins them when the
+ * song lifts, so the whole cast dances the chorus. On quiet sections nobody
  * takes lead, because a ballad with a hype man behind it reads as wrong.
  *
  * @param {string} sectionMove Move chosen for the section.
  * @param {number} dancerIndex
  * @param {object} section
+ * @param {string} [role] The section's part in the song; see `sectionRoles`.
  * @returns {string}
  */
-function moveForDancer(sectionMove, dancerIndex, section) {
+function moveForDancer(sectionMove, dancerIndex, section, role = 'verse') {
   if (section.energy_mean < CALM_ENERGY) {
     // Near-silence: the lead still performs, everyone else settles. This is the
     // only case where standing still is the right answer.
@@ -2365,9 +2656,17 @@ function moveForDancer(sectionMove, dancerIndex, section) {
   }
 
   if (dancerIndex === 0) {
-    // The lead alternates between singing and joining in, so it is not static.
-    return section.index % 3 === 2 ? sectionMove : 'sing';
+    // The lead sings the quieter parts of the song and joins the dance when it
+    // lifts. It used to sing two sections in three by *index*, whatever the
+    // music was doing, so the figure with the microphone was often the one
+    // standing apart through a chorus.
+    return ['build', 'chorus', 'drop'].includes(role) ? sectionMove : 'sing';
   }
+
+  // The chorus is danced together. Companion moves are what stop a cast
+  // reading as clones through a verse; the hook is the moment a group locks
+  // into one move, and it is the part of a routine an audience remembers.
+  if (role === 'chorus' || role === 'drop') return sectionMove;
 
   // Backing performers take related but distinct moves rather than all copying
   // the section's choice, which is what turns a row of clones into a group.
@@ -2438,16 +2737,27 @@ const FORMATIONS = [
 ];
 
 /**
- * Camera setups, chosen per section.
+ * Which formation each part of a song is danced in, by index into
+ * {@link FORMATIONS}.
  *
- * Each is a *position* in world space plus what it looks at, rather than a yaw
- * and a distance. That is what allows genuine movement on all three axes - a
- * crane rising while tracking sideways, a low push-in - none of which an
- * orbit-and-distance rig can express.
- *
- * `drift` adds a slow continuous motion on top, so no shot is ever perfectly
- * still: `[x, y, z]` amplitudes and a period in seconds.
+ * It was the section's index, so the formation changed at every boundary but
+ * meant nothing - a chorus could land in any of the five. Now the shape follows
+ * the song: an open arc for the intro and outro, staggered rows for a verse, a
+ * line for a build, the wedge with the lead forward for a chorus and a drop,
+ * and a circle for a breakdown. The second chorus lands in the shape the first
+ * did, which is half of what makes it read as the chorus again.
  */
+const ROLE_FORMATIONS = {
+  intro: 4,
+  verse: 1,
+  build: 0,
+  chorus: 3,
+  drop: 3,
+  breakdown: 2,
+  outro: 4,
+  silence: 4,
+};
+
 /**
  * Which shots suit which moment in a track.
  *
@@ -2488,6 +2798,17 @@ function barsPerCut(moment, energy) {
   return 8;
 }
 
+/**
+ * Camera setups, chosen per section.
+ *
+ * Each is a *position* in world space plus what it looks at, rather than a yaw
+ * and a distance. That is what allows genuine movement on all three axes - a
+ * crane rising while tracking sideways, a low push-in - none of which an
+ * orbit-and-distance rig can express.
+ *
+ * `drift` adds a slow continuous motion on top, so no shot is ever perfectly
+ * still: `[x, y, z]` amplitudes and a period in seconds.
+ */
 export const SHOTS = [
   {
     name: 'wide', position: [0, 2.2, -9.5], look: [0, 1.0, 0], target: null,
@@ -2509,9 +2830,14 @@ export const SHOTS = [
     name: 'floor', position: [0, 0.25, -5.0], look: [0, 1.4, 0], target: null,
     drift: { amp: [2.4, 0.12, 0.5], period: [19, 23, 17] },
   },
+  // From the wings, not square to the side. Every formation spreads the cast
+  // across the stage, and looking straight along that the figures stood one
+  // behind another: measured over four cached tracks, a figure was hidden
+  // behind another in 45.6% of this shot's dancer-frames, and 50.0% once
+  // builds took to a line. From here it is 19.5%.
   {
-    name: 'sidelong', position: [-7.5, 1.6, 0.5], look: [0, 1.1, 0], target: null,
-    drift: { amp: [0.9, 0.5, 2.6], period: [24, 13, 18] },
+    name: 'sidelong', position: [-6.4, 1.6, -3.9], look: [0, 1.1, 0], target: null,
+    drift: { amp: [0.9, 0.5, 1.6], period: [24, 13, 18] },
   },
   // Was a near-plan view: 7.5 up, 3.0 out, looking at the floor - about 68
   // degrees down. These figures are drawn as flat strokes with no volume, so
@@ -2570,6 +2896,14 @@ export class StickMenVisual {
     this.paletteBase = 0;
     this.move = 'step';
     this.formation = 0;
+    /** The song's dance, planned once per score; see `planChoreography`. */
+    this.plan = null;
+    this.planScore = null;
+    /** The current section's part in the song, and how hard it is danced, 0-1. */
+    this.role = 'verse';
+    this.intensity = 0.5;
+    /** Each move's centre pose, cached; see `centreOf`. */
+    this.centres = new Map();
     /** Playback position, set each frame; the camera and environment read it. */
     this.scoreSec = 0;
     this.lastFrameMs = performance.now();
@@ -2634,12 +2968,6 @@ export class StickMenVisual {
       tuck: {
         arms: [{ tuckSec: 0 }, { tuckSec: 0 }],
         legs: [{ tuckSec: 0 }, { tuckSec: 0 }],
-        // The head clearance keeps its own timers rather than sharing the arms'.
-        // Sharing them couples two unrelated grace periods: a hand held at the
-        // face would spend the allowance that a later arm-across-the-chest pose
-        // needs, and each would cut the other short at a distance from its own
-        // obstacle that it was never measuring.
-        heads: [{ tuckSec: 0 }, { tuckSec: 0 }],
       },
       // The smoothed pose actually drawn. Targets are computed each frame and
       // this chases them, so nothing ever steps and move changes cross-fade.
@@ -2765,6 +3093,15 @@ export class StickMenVisual {
       saturate(mixHex(currentPalette[1], nextPalette[1], blend), 0.22),
     ];
 
+    // Planned once per score, and again when the score is replaced: a partial
+    // analysis gives way to the full one once it is ready, and its sections
+    // cover only the opening of the track.
+    if (score !== this.planScore) {
+      this.planScore = score;
+      this.plan = planChoreography(score);
+      this.sectionIndex = -1;
+    }
+
     const section = score.sections.find(
       (s) => scoreSec >= s.start_sec && scoreSec < s.end_sec,
     );
@@ -2775,25 +3112,15 @@ export class StickMenVisual {
       // itself - assigning here as well would overwrite the blended value for
       // one frame at every section boundary, which shows as a colour flicker.
       this.paletteBase = section.index % PALETTES.length;
-      this.formation = section.index % FORMATIONS.length;
+      const entry = this.plan?.sections?.[section.index];
+      this.role = entry?.role ?? 'verse';
+      this.intensity = entry?.intensity ?? Math.min(1, section.energy_mean * 1.4);
+      this.formation = ROLE_FORMATIONS[this.role] ?? section.index % FORMATIONS.length;
 
-      // Lyrics take precedence when present. When absent - every instrumental,
-      // and any track where transcription was unavailable - a stand-in is
-      // derived from the audio so the choreography still has valence, arousal
-      // and density to work with rather than falling back to a single default
-      // routine. Brightness maps to valence and flux to arousal, the same
-      // mapping the shared lane reader uses.
-      const mood = score.lyrics?.sections?.[section.index] ?? {
-        valence: (section.brightness_mean - 0.45) * 1.4,
-        arousal: Math.min(1, section.energy_mean * 1.3),
-        density: section.energy_mean * 3,
-        theme: null,
-        keywords: [],
-      };
-      this.mood = mood;
-
+      // A choreography supplied with the score still takes precedence. The plan
+      // dances every track that has none - which, so far, is every track.
       const planned = score.choreography?.sections?.[section.index];
-      this.routine = routineForSection(section, planned);
+      this.routine = planned || !entry ? routineForSection(section, planned) : entry.routine;
       this.phraseKey = null;
       if (planned?.palette?.length === 2) this.palette = planned.palette;
       this.sectionStartSec = section.start_sec;
@@ -2900,37 +3227,6 @@ export class StickMenVisual {
     }
   }
 
-  /**
-   * Choose the routine for the current section from its lyric theme.
-   *
-   * Entries are validated against {@link MOVES} before being returned. They were
-   * not, and the romance and melancholy routines both named `sway` at a point
-   * when no such move existed - `MOVES.sway` came back undefined and the
-   * renderer threw on the next frame. An exception here is not cosmetic: the
-   * render guard in `main.js` disables Stick Men for the rest of the session, so
-   * one bad name in a table takes the whole visualisation off the menu. Unlike
-   * `routineForSection`, which already filtered, this path fed `updatePhrase`
-   * directly.
-   *
-   * `sway` is now a real move, so those two routines pass intact. The filter
-   * stays regardless: these tables are edited by hand and the failure mode is
-   * far too expensive for the check to be worth removing.
-   *
-   * @param {object} section
-   * @returns {string[]|null} Move names, or null to fall back to the section
-   *   routine.
-   */
-  routineFor(section) {
-    void section;
-    const themed = this.mood?.theme ? THEME_ROUTINES[this.mood.theme] : null;
-    if (!themed) return null;
-    // Arousal picks between the calmer and busier variant of the theme, so a
-    // quiet romantic verse and a soaring romantic chorus differ.
-    const variant = themed[this.mood.arousal > 0.35 ? 1 : 0];
-    const valid = variant.filter((move) => MOVES[move]);
-    return valid.length > 0 ? valid : null;
-  }
-
   updatePhrase(scoreSec, bpm, meter) {
     if (!this.section || this.routine.length === 0) return;
     const secondsPerBeat = 60 / (bpm > 0 ? bpm : 120);
@@ -2951,12 +3247,11 @@ export class StickMenVisual {
     const firstPhrase = this.phraseKey === null;
     this.phraseKey = phraseKey;
     this.phraseIndex = phraseIndex;
-    const routine = this.routineFor(this.section) ?? this.routine;
-    this.move = routine[phraseIndex % routine.length];
+    this.move = this.routine[phraseIndex % this.routine.length];
 
     const calm = this.section.energy_mean < QUIET_ENERGY;
     for (const dancer of this.dancers) {
-      dancer.move = moveForDancer(this.move, dancer.index, this.section);
+      dancer.move = moveForDancer(this.move, dancer.index, this.section, this.role);
       // No connector into the very first phrase: there is nothing to connect
       // from, and running one there just delays the opening move.
       dancer.transitionBeats = firstPhrase ? 0 : TRANSITION_BEATS;
@@ -3996,7 +4291,10 @@ export class StickMenVisual {
     // exactly wrong at the moment the whole room is supposed to hit together.
     const together = 1 - Math.min(1, this.dropHit ?? 0);
     const offset = dancer.beatOffset * together + dancer.canon * spread * together;
-    const dancerBeat = beatCount + offset;
+    // Read a little ahead of the music, by as long as the pose springs trail
+    // their targets, so what is drawn lands on the beat rather than after it.
+    const lead = SPRING_LAG_SEC * ((this.bpm > 0 ? this.bpm : 120) / 60);
+    const dancerBeat = beatCount + offset + lead;
     const bar = (dancerBeat / meter) % 1;
     const beat = dancerBeat % 1;
 
@@ -4040,110 +4338,48 @@ export class StickMenVisual {
       target.legs[1].knee += Math.max(0, -weight) * 8 * DEG * groove;
     }
 
-    // Arm flourish, layered on whatever the move specifies.
+    // How big the dance is.
     //
-    // Several moves hold one arm still by design - the mic hand in `sing` is the
-    // clearest case - and because the lead sings for most of a track, that arm
-    // read as dead. Measured across two minutes, arm 0 varied by 40 degrees of
-    // lift against arm 1's 101.
+    // Three things decide it, each for its own reason. The plan's intensity is
+    // where this section stands in the song, so a chorus is danced harder than
+    // the verse before it whatever their absolute levels. The live energy is
+    // how loud this moment is. The phrase arc gives a routine somewhere to go
+    // across its eight bars.
     //
-    // This adds a continuous, independently-phased motion to both arms, so
-    // neither can ever be static regardless of what the pose asks for. The two
-    // sides use different rates so they never mirror each other, which is what
-    // makes the motion look like dancing rather than calisthenics.
-    const flourishClock = beatCount * 0.5 + offset * 6.28;
-    // Limb travel takes the energy that used to go into vertical launch: a
-    // dancer at full tilt moves their arms and hips further, not higher.
-    // Lyric valence scales the whole performance. Bleak words make the figures
-    // move smaller and stay lower; elated ones open them up. Neutral or absent
-    // lyrics leave this at 1, so nothing changes for instrumentals.
-    const valence = this.mood?.valence ?? 0;
-    const spirit = 1 + valence * 0.22;
-    // Delivery speed drives it too: a dense rap verse should look busier than a
-    // sparse one at the same loudness.
-    const wordy = Math.min(1, (this.mood?.density ?? 0) / 4);
+    // This used to come from the lyric mood and energy, and was applied to
+    // every authored angle about one fixed rest pose. That is what put the arms
+    // over the heads: at a phrase peak on an ordinary section the factor was
+    // 1.75, so a clap authored level with the shoulders, 95 degrees of swing,
+    // was drawn at 151 with the hands at the height of the head. Measured
+    // through the real camera over four cached tracks, an arm crossed a head on
+    // screen in 35.0% of arm-frames and 57.9% of dancer-frames; 7.7% and 12.9%
+    // since, most of it the side-on and floor-level shots, where a raised arm
+    // really does pass in front of the head.
+    const intensity = this.intensity;
+    const gain = (0.8 + intensity * 0.3 + this.energy * 0.15)
+      * (1 + (arc.intensity - 1) * 0.5);
 
-    // Named `amplitude`, not `swell`: the module-level `swell()` is a 0-1-0
-    // curve and this is a scalar multiplier. Shadowing it here meant any use of
-    // `swell(bar)` inside this method would have thrown "not a function".
+    // Each move made bigger or smaller about its own centre.
     //
-    // Scaled by the phrase arc, which is what gives a routine somewhere to go.
-    // Without it every bar of a phrase was performed at identical size, so a
-    // move could only ever repeat - the movement had rhythm but no shape.
-    const amplitude = (0.95 + this.energy * 2.05 + wordy * 0.35)
-      * spirit * arc.intensity;
+    // Scaling the distance from a fixed rest pose moved *where* a move happens
+    // as well as how big it is, so every held position drifted toward the
+    // extremes: the mic hand of `sing`, authored beside the face, ended up over
+    // the head. Scaling only the departure from the move's own average keeps
+    // every gesture where it was written and makes its travel livelier.
+    const centre = this.centreOf(moveName, move, meter);
+    const about = (value, middle, by = gain) => middle + (value - middle) * by;
 
-    // Separate, smaller gain for the flourishes.
+    // A small accent on top, locked to the dancer's bar.
     //
-    // `amplitude` reaches about 2.4 on a loud section at the peak of a phrase,
-    // and the flourish terms below are written in degrees that already assume a
-    // gain near 1. Multiplied out, the elbow flourish alone swung +/-79 degrees
-    // across a joint whose entire range is 107 - so it could not help but drive
-    // the joint into its limit, and it did so on 24% of frames even after the
-    // limits were softened. Compressing the top of the range keeps loud
-    // passages bigger than quiet ones without letting the accent outgrow the
-    // body it is decorating.
-    const flourishGain = Math.min(amplitude, 1.05 + Math.tanh(amplitude - 1.05) * 0.55);
-
-    // The flourish is locked to the bar rather than free-running, so the motion
-    // repeats as a pattern the eye can follow instead of wandering. A cycle that
-    // does not close on a musical boundary reads as drift; one that does reads
-    // as choreography.
-    const barPhase = (beatCount / 4 + offset) % 1;
-    const patterned = Math.sin(barPhase * Math.PI * 2);
-    const patternedHalf = Math.sin(barPhase * Math.PI * 4);
-
-    // The five endpoints - two hands, two feet, the head - are what a viewer
-    // actually reads as the shape of a dance. Driving them on separate,
-    // incommensurate cycles means the figure forms new silhouettes continuously
-    // instead of cycling through the same handful of poses.
-    //
-    // Each endpoint gets its own reach envelope: a slow swell that moves it
-    // toward and away from the body independently of what its limb is doing, so
-    // an arm can extend fully while the other folds in.
-    // The parameter is `seed`, not `offset`: an enclosing `offset` now carries
-    // this figure's canon displacement, and a parameter of the same name would
-    // silently hide it from every call made here.
-    const envelope = (rate, seed) => 0.5 + 0.5
-      * Math.sin(flourishClock * rate + seed)
-      * Math.sin(flourishClock * rate * 0.37 + seed * 1.7);
-
-    // Choreographic figures.
-    //
-    // Moves define a pose per bar; what was missing is *structure across bars* -
-    // the repeating, resolving shapes a routine is actually built from. Each
-    // figure below is a closed mathematical form evaluated over the phrase, so
-    // the motion is guaranteed to return to where it started and therefore reads
-    // as deliberate rather than as drift.
-    //
-    // The three are chosen to be geometrically distinct, so they cannot blur
-    // into one another: a figure-eight crosses the body, a circle sweeps around
-    // it, and a pendulum swings across it. Which one is running comes from the
-    // phrase index, so it changes on musical boundaries.
-    const phraseT = ((beatCount / (4 * PHRASE_BARS)) + offset) % 1;
-    const figure = (this.phraseIndex + dancer.index) % 3;
-    const tau = phraseT * Math.PI * 2;
-
-    // Each returns a reach and a height offset for the arms, in radians.
-    let figureReach;
-    let figureLift;
-    if (figure === 0) {
-      // Lemniscate - a figure of eight. The arms cross the midline twice per
-      // phrase, which is the single most legible "dance" shape there is.
-      const d = 1 + Math.sin(tau) ** 2;
-      figureReach = (Math.cos(tau) / d) * 46 * DEG;
-      figureLift = (Math.sin(tau) * Math.cos(tau) / d) * 62 * DEG;
-    } else if (figure === 1) {
-      // Circle, traced at a phase offset per arm so they chase each other.
-      figureReach = Math.cos(tau) * 38 * DEG;
-      figureLift = Math.sin(tau) * 48 * DEG;
-    } else {
-      // Pendulum: a swing that slows at each extreme and holds there, which is
-      // what gives a movement its accent.
-      const swing = Math.sin(tau);
-      figureReach = Math.sign(swing) * Math.abs(swing) ** 0.6 * 52 * DEG;
-      figureLift = Math.cos(tau * 2) * 30 * DEG;
-    }
+    // This was the largest term in the motion: up to 40 degrees of arm swing
+    // and 46 of lift, from free-running sines at unrelated rates, scaled by a
+    // gain that reached 2.4 - so no two bars looked alike and the arms
+    // wandered wherever the sum took them, which reads as flailing rather than
+    // as a routine. Its job was keeping a held arm alive, and a few degrees in
+    // time with the bar does that without competing with the move.
+    const accent = 0.6 + intensity * 0.6;
+    const pulse = Math.sin(bar * Math.PI * 2);
+    const pulseHalf = Math.sin(bar * Math.PI * 4);
 
     // Weight shift.
     //
@@ -4154,18 +4390,29 @@ export class StickMenVisual {
     // to stay balanced. Without it the figure is symmetrical at every instant,
     // which is why it read as a mechanism rather than a body.
     //
-    // Support alternates every two beats - the pulse a dancer actually shifts
-    // on, rather than every beat which reads as marching.
-    const shiftPhase = (beatCount / 2 + offset) % 1;
-    // Smoothstep rather than a sine: the transfer happens over part of the
+    // Where the move says which foot is standing, the move decides: a leg that
+    // is kicked, lifted or folded is not carrying anything. Everywhere else the
+    // weight alternates on the beat. That alternation used to decide alone,
+    // and it put the weight on the left foot for the very beat a march lifts
+    // the left knee - so the planted foot held the knee down, and the march
+    // stood still.
+    const freedom = (leg) => Math.abs(leg.swing) + Math.max(0, leg.knee - 20 * DEG) * 0.8;
+    const favoured = Math.tanh((freedom(target.legs[1]) - freedom(target.legs[0])) * 5);
+    const shiftPhase = (dancerBeat / 2) % 1;
+    // Squared off rather than a sine: the transfer happens over part of the
     // cycle and then holds, which is how weight actually moves.
     const raw = Math.sin(shiftPhase * Math.PI * 2);
-    const weight = Math.sign(raw) * Math.min(1, Math.abs(raw) * 1.6);
+    const alternating = Math.sign(raw) * Math.min(1, Math.abs(raw) * 1.6);
+    const weight = favoured + alternating * (1 - Math.abs(favoured));
     // +1 means weight on side 0, -1 on side 1. Written into a pair the dancer
     // already owns rather than a fresh array, because `drawDancer` needs it to
     // decide which foot is carrying the figure and may therefore be planted.
     dancer.support[0] = (1 + weight) / 2;
     dancer.support[1] = (1 - weight) / 2;
+    // How far the body rides over the standing leg grows with the song, so a
+    // quiet passage shifts gently and a chorus throws its weight about. The
+    // support itself still alternates in full: the feet keep stepping.
+    const shift = weight * (0.4 + intensity * 0.6);
 
     // Preparation before each accent, scaled by how much of an accent there is
     // to prepare for. A silent passage should not have the figures bracing for
@@ -4174,159 +4421,124 @@ export class StickMenVisual {
 
     const armFlourish = [0, 1].map((side) => {
       const mirror = side === 0 ? 1 : -1;
-      const phase = flourishClock * (side === 0 ? 1.0 : 0.83) + side * 2.1;
-      // Reach envelope per hand, so the two are rarely at the same extension.
-      const extend = envelope(0.29 + side * 0.11, side * 2.6);
       return {
-        extend,
-        // Two components: a bar-locked pattern that gives the movement shape,
-        // and a slower free drift so the pattern is never mechanically exact.
-        swing: (patterned * 26 * mirror + Math.sin(phase * 0.61) * 14) * DEG * flourishGain,
-        lift: (patternedHalf * 30 + Math.sin(phase * 0.44 + 1.1) * 16) * DEG * flourishGain,
-        // Straightening and folding is what makes a gesture read as a *reach*
-        // rather than a wave. Driven by the envelope, not by the pose.
-        elbow: (patterned * 20 * mirror + Math.sin(phase * 0.77) * 12
-          - (extend - 0.5) * 46) * DEG * flourishGain,
+        swing: pulse * 9 * mirror * DEG * accent,
+        lift: pulseHalf * 8 * DEG * accent,
+        // Opening as the arm swings forward, so the accent reads as a reach.
+        elbow: -pulse * 8 * mirror * DEG * accent,
       };
     });
 
-    // Feet, on their own envelopes. Without these the legs only ever step,
-    // which is why the lower half looked static next to the arms.
     const legFlourish = [0, 1].map((side) => {
       const mirror = side === 0 ? 1 : -1;
-      const extend = envelope(0.23 + side * 0.09, 1.3 + side * 2.1);
-      const phase = flourishClock * (side === 0 ? 0.91 : 1.07) + side * 1.6;
       return {
-        swing: (patternedHalf * 16 * mirror + Math.sin(phase * 0.53) * 11) * DEG * flourishGain,
-        lift: (patterned * 13 * mirror + Math.sin(phase * 0.67) * 8) * DEG * flourishGain,
-        knee: (Math.sin(phase * 0.83) * 16 - (extend - 0.5) * 40) * DEG * flourishGain,
+        swing: pulseHalf * 5 * mirror * DEG * accent,
+        // Only ever softening a knee: a flourish that straightened one would
+        // lock the leg the weight shift has just bent to take the load.
+        knee: Math.max(0, pulse * mirror) * 8 * DEG * accent,
       };
     });
 
-    // Hips and shoulders get their own, so the whole body is involved rather
-    // than only the limbs - which is most of what separates dancing from
-    // gesturing.
+    // The hips and shoulders join in, so the whole body dances rather than only
+    // the limbs, but by a few degrees. The body turn was up to 77 degrees on
+    // its own before the move's turn was added, which spun figures side-on to
+    // the camera and hid whatever their arms were doing.
     const bodyFlourish = {
-      sway: (patterned * 0.09 + Math.sin(flourishClock * 0.53) * 0.04) * amplitude,
-      turn: (patterned * 22 + Math.sin(flourishClock * 0.37) * 10) * DEG * amplitude,
-      twist: (patternedHalf * 26 + Math.sin(flourishClock * 0.71) * 12) * DEG * amplitude,
+      sway: pulse * 0.035 * accent,
+      turn: pulse * 6 * DEG * accent,
+      twist: -pulseHalf * 8 * DEG * accent,
       // A shallow bounce on the beat, not a leap.
       //
-      // This was scaled by `amplitude`, which reaches 2.6 at high energy - so the
-      // figures launched off the floor with nothing bringing them down in any
-      // controlled way, which read as twitching rather than dancing. Dancers
-      // stay grounded and move mostly in the hips and limbs; vertical travel is
-      // punctuation, not the substance.
+      // This was scaled by the performance gain, which reached 2.6 at high
+      // energy - so the figures launched off the floor with nothing bringing
+      // them down in any controlled way, which read as twitching rather than
+      // dancing. Dancers stay grounded and move mostly in the hips and limbs;
+      // vertical travel is punctuation, not the substance.
       //
       // The second term is the preparation: the hips sink slightly in the last
       // quarter-beat before an accent, so the figure gathers itself and then
       // meets the beat rather than being knocked into motion by it. It is
       // subtracted from a value that is already negative-going, so preparation
       // and the bounce it precedes work in the same direction.
-      bob: -Math.abs(Math.sin(beatCount * Math.PI)) * 0.030 - prep * 0.045,
+      bob: -Math.abs(Math.sin(dancerBeat * Math.PI)) * 0.030 - prep * 0.030,
       // Folding into the preparation as well: a body that dips without its spine
       // following reads as the hips dropping out from under a rigid torso.
       prepBend: prep * 7 * DEG,
     };
 
-    // Head performance, layered on top of whatever the move specifies.
+    // The head keeps time.
     //
-    // Moves set the head mainly to punctuate their own gesture, so across a
-    // routine it barely moves. A continuous lane driven by the music - nodding
-    // to the beat, scanning slowly, tilting into the phrase - gives the figures
-    // something alive above the shoulders regardless of what their limbs are
-    // doing. Rates are incommensurate so the pattern never visibly loops.
-    const headClock = beatCount * 0.25 + offset * 6.28;
-    const nod = attack(beat) * (0.35 + this.punch * 0.5);
-    const headSwell = 0.85 + this.energy * 1.2;
+    // It was a free-running wobble of up to 47 degrees each way, doubled by the
+    // gain and clamped at 45: the heads swung and scanned the room at random,
+    // which more than anything made the figures look daft. A dancer's head
+    // nods on the beat - deeper as the music hits harder and the song lifts -
+    // and tilts a little with the bar.
+    const nod = attack(beat) * (4 + this.punch * 6 + intensity * 6);
     const headExtra = {
-      swing: (Math.sin(headClock * 0.71) * 16
-        + Math.sin(headClock * 0.29 + 2.2) * 9 - nod * 20) * DEG * headSwell,
-      lift: (Math.sin(headClock * 0.43 + 1.7) * 22
-        + Math.sin(headClock * 1.13) * 9) * DEG * headSwell,
+      swing: -nod * DEG,
+      lift: pulse * 4 * DEG * accent,
     };
 
-    // Amplify *movement*, not absolute angle.
-    //
-    // Multiplying the raw values was wrong and produced exactly the complaint
-    // that limbs sit behind the head: an arm held at -128 degrees for a
-    // microphone became -256 at high energy, wrapping right around the body.
-    // Scaling the deviation from a neutral stance instead exaggerates gestures
-    // while leaving held positions where the pose intended them.
-    // The phrase arc has to reach *this* factor, not only the flourish terms.
-    //
-    // Scaling `amplitude` alone was measured and does almost nothing: the
-    // flourishes are added on top of the move's own angles, and those angles are
-    // amplified here instead. With only the flourish scaled, hand travel across
-    // a phrase stayed flat within noise - 0.164 to 0.209 with no discernible
-    // shape - because the dominant term was not being shaped at all.
-    // Half the arc, not all of it.
-    //
-    // `amplitude` above is already scaled by the full phrase intensity, and it
-    // drives the flourish that is *added* to whatever this produces. Scaling
-    // both by the same factor compounds: at the peak of a phrase on a loud
-    // section the two together pushed authored poses roughly two and a half
-    // times past what was written, which is what drove the joints onto their
-    // limits and folded the figures into a single black mass.
-    const reach = (1.30 + this.energy * 0.55) * (1 + (arc.intensity - 1) * 0.5);
-    const from = (value, rest) => rest + (value - rest) * reach;
+    // Held positions of the trunk and head are amplified less than the limbs:
+    // a bigger dance is bigger gestures, not a figure bent double.
+    const bodyGain = Math.min(gain, 1.2);
 
     const amplified = {
       ...target,
       // Vertical travel is clamped hard. A move's own bob is a fraction of a
-      // body height by design, but multiplying it by the amplification factor
-      // turned a small hop into a launch.
+      // body height by design, but multiplying it by the gain turned a small
+      // hop into a launch.
       // Riding over the supporting foot lowers the body slightly, as taking the
       // load compresses the standing leg.
       bob: clamp(
-        target.bob * Math.min(reach, 1.15) + bodyFlourish.bob
-          + Math.abs(weight) * 0.012,
+        target.bob * Math.min(gain, 1.15) + bodyFlourish.bob
+          + Math.abs(shift) * 0.012,
         LIMITS.bob,
       ),
       // Hips travel toward the supporting side. This is the visible half of the
       // weight shift and the reason the figure looks planted rather than
       // hovering.
-      sway: target.sway * reach + bodyFlourish.sway + weight * 0.10,
-      turn: from(target.turn, 0) + bodyFlourish.turn,
+      sway: about(target.sway, centre.sway) + bodyFlourish.sway + shift * 0.10,
+      // Not amplified. Turning is the one motion that hides the dance rather
+      // than showing it, and `spin` authors a full turn per bar that any gain
+      // would break at the bar line. See `nearestTurn` for the other half.
+      turn: nearestTurn(target.turn + bodyFlourish.turn, dancer.pose.turn),
       spineBend: softClamp(
-        from(target.spineBend, 4 * DEG) + bodyFlourish.prepBend, LIMITS.spine,
+        about(target.spineBend, centre.spineBend, bodyGain) + bodyFlourish.prepBend,
+        LIMITS.spine,
       ),
       // Shoulders counter-rotate against the hips, which is what keeps a shifting
       // body balanced and reads as ease rather than stiffness.
       spineTwist: softClamp(
-        from(target.spineTwist, 0) + bodyFlourish.twist - weight * 11 * DEG,
+        about(target.spineTwist, centre.spineTwist, bodyGain) + bodyFlourish.twist
+          - shift * 8 * DEG,
         LIMITS.spine,
       ),
       head: {
-        swing: softClamp(from(target.head.swing, 0) + headExtra.swing, LIMITS.head),
-        lift: softClamp(from(target.head.lift, 0) + headExtra.lift, LIMITS.head),
+        swing: softClamp(
+          about(target.head.swing, centre.head.swing, bodyGain) + headExtra.swing, LIMITS.head,
+        ),
+        lift: softClamp(
+          about(target.head.lift, centre.head.lift, bodyGain) + headExtra.lift, LIMITS.head,
+        ),
       },
-      // A block body rather than the object literal this used to be: the head
-      // clearance needs all three joints of an arm at once, because where a hand
-      // ends up is a function of all three together.
       arms: target.arms.map((arm, side) => {
+        const middle = centre.arms[side];
         const swing = softClamp(
-          from(arm.swing, REST.armSwing) + armFlourish[side].swing, LIMITS.armSwing,
+          about(arm.swing, middle.swing) + armFlourish[side].swing, LIMITS.armSwing,
         );
-
-        // Lift is exaggerated harder than the rest: getting arms away from the
-        // torso is what makes a pose readable at a distance.
         const lift = softClamp(
           repel(
-            REST.armLift + (arm.lift - REST.armLift) * (reach * 1.25)
-              + armFlourish[side].lift,
+            about(arm.lift, middle.lift) + armFlourish[side].lift,
             dancer.pose.arms[side].lift,
             MIN_ARM_SPREAD, dancer.tuck.arms[side], deltaSec,
           ),
           LIMITS.armLift,
         );
 
-        // The accent is applied around the rest value rather than added on top,
-        // so a large flourish opens the arm as often as it closes it. Purely
-        // additive, it only ever bent the elbow further shut.
         // Bend is barely amplified, unlike every other joint.
         //
-        // Amplifying a fold is backwards. `fromLegacy` maps bend to reach
+        // Amplifying a fold is backwards. `poseAim` maps bend to reach
         // inversely - the more an elbow is folded, the shorter the arm gets and
         // the closer the hand sits to the shoulder - so scaling bend by the
         // usual factor makes a gesture *smaller* while spending the joint's
@@ -4334,47 +4546,34 @@ export class StickMenVisual {
         // 142, past the 112 limit, so it pinned there with the hand tucked into
         // the chest: measured at 27% of all frames, and the single largest
         // reason the figures rendered as one black mass.
-        //
-        // Capped the way `bob` is. A bigger gesture is a straighter arm reaching
-        // further, which the swing and lift terms above already deliver.
         const elbow = softClamp(
-          REST.elbow + (arm.elbow - REST.elbow) * Math.min(reach, 1.12)
-            + armFlourish[side].elbow * 0.45,
+          about(arm.elbow, middle.elbow, Math.min(gain, 1.12)) + armFlourish[side].elbow,
           LIMITS.elbow,
         );
 
-        // Once per arm per frame: it advances the head clearance's timer. Fed
-        // the pose *after* the torso clearance, because that is the pose that
-        // will actually be drawn - and because the torso rule is what puts some
-        // of these hands next to the head in the first place, by pushing an arm
-        // authored across the chest out to a lift of -41 degrees.
-        const open = clearHead(
-          { swing, lift, elbow },
-          dancer.pose.arms[side],
-          dancer.tuck.heads[side], deltaSec,
-        );
-
-        // Subtracted rather than added: a smaller bend is a longer reach, and
-        // reach is what carries the hand clear of the head.
-        return { swing, lift, elbow: softClamp(elbow - open, LIMITS.elbow) };
+        // Not amplified: how far an elbow flares is part of the shape, not
+        // of its size.
+        return { swing, lift, elbow, flare: arm.flare ?? 0 };
       }),
-      legs: target.legs.map((leg, side) => ({
-        swing: softClamp(
-          from(leg.swing, REST.legSwing) + legFlourish[side].swing, LIMITS.legSwing,
-        ),
-        lift: softClamp(
-          repel(
-            REST.legLift + (leg.lift - REST.legLift) * (reach * 1.15)
-              + legFlourish[side].lift,
-            dancer.pose.legs[side].lift,
-            MIN_LEG_SPREAD, dancer.tuck.legs[side], deltaSec,
+      legs: target.legs.map((leg, side) => {
+        const middle = centre.legs[side];
+        return {
+          swing: softClamp(
+            about(leg.swing, middle.swing) + legFlourish[side].swing, LIMITS.legSwing,
           ),
-          LIMITS.legLift,
-        ),
-        knee: softClamp(
-          from(leg.knee, REST.knee) + legFlourish[side].knee, LIMITS.knee,
-        ),
-      })),
+          lift: softClamp(
+            repel(
+              about(leg.lift, middle.lift),
+              dancer.pose.legs[side].lift,
+              MIN_LEG_SPREAD, dancer.tuck.legs[side], deltaSec,
+            ),
+            LIMITS.legLift,
+          ),
+          knee: softClamp(
+            about(leg.knee, middle.knee) + legFlourish[side].knee, LIMITS.knee,
+          ),
+        };
+      }),
     };
 
     // Chase the target pose. A rate around 14 keeps the movement crisp while
@@ -4394,7 +4593,61 @@ export class StickMenVisual {
     dancer.x += (slotX - dancer.x) * pull * deltaSec;
     dancer.z += (slotZ - dancer.z) * pull * deltaSec;
 
-    dancer.facing = pose.turn * dancer.mirror;
+    dancer.facing = FACING_AUDIENCE + pose.turn * dancer.mirror;
+  }
+
+  /**
+   * A move's centre: its average pose over one bar, at the current energy.
+   *
+   * What the dynamics amplify around. Moves are pure functions of the position
+   * in the bar, so the mean over sixteen points of it is the pose the move
+   * oscillates about - a clap held at chest height, a mic hand at the mouth -
+   * and scaling only the departure from it makes a move *livelier* without
+   * moving where it happens. Cached per move and energy band: sixteen calls to
+   * a pose function once, rather than every frame for every dancer.
+   *
+   * @param {string} name
+   * @param {Function} move
+   * @param {number} meter
+   * @returns {object} A pose, in the shape a move returns.
+   */
+  centreOf(name, move, meter) {
+    const energyKey = Math.round(this.energy * 8);
+    const punchKey = Math.round(this.punch * 8);
+    const key = `${name}|${energyKey}|${punchKey}|${meter}`;
+    const known = this.centres.get(key);
+    if (known) return known;
+
+    const samples = 16;
+    const centre = {
+      bob: 0, sway: 0, turn: 0, spineBend: 0, spineTwist: 0,
+      head: { swing: 0, lift: 0 },
+      arms: [{ swing: 0, lift: 0, elbow: 0, flare: 0 }, { swing: 0, lift: 0, elbow: 0, flare: 0 }],
+      legs: [{ swing: 0, lift: 0, knee: 0 }, { swing: 0, lift: 0, knee: 0 }],
+    };
+    const share = 1 / samples;
+    for (let k = 0; k < samples; k++) {
+      const bar = k / samples;
+      const pose = move(bar, (bar * (meter > 0 ? meter : 4)) % 1, energyKey / 8, punchKey / 8);
+      for (const field of ['bob', 'sway', 'turn', 'spineBend', 'spineTwist']) {
+        centre[field] += (pose[field] ?? 0) * share;
+      }
+      centre.head.swing += (pose.head?.swing ?? 0) * share;
+      centre.head.lift += (pose.head?.lift ?? 0) * share;
+      for (const side of [0, 1]) {
+        for (const joint of ['swing', 'lift', 'elbow', 'flare']) {
+          centre.arms[side][joint] += (pose.arms?.[side]?.[joint] ?? 0) * share;
+        }
+        for (const joint of ['swing', 'lift', 'knee']) {
+          centre.legs[side][joint] += (pose.legs?.[side]?.[joint] ?? 0) * share;
+        }
+      }
+    }
+    // Bounded: thirty-four moves in eighty-one energy bands is the most there
+    // can be, but a leak here would be one no test would notice.
+    if (this.centres.size > 4000) this.centres.clear();
+    this.centres.set(key, centre);
+    return centre;
   }
 
   /**
@@ -4427,13 +4680,15 @@ export class StickMenVisual {
     const pose = dancer.pose;
 
     const s = dancer.build;
-    // Taller, with the extra height in the legs and spine rather than in the
-    // head - lengthening everything uniformly just scales the figure up, where
-    // longer limbs against the same head give a genuinely taller silhouette.
+    // Low enough for a standing leg to reach the floor with the knee soft.
     //
-    // The proportions are module constants because the head clearance reads them
-    // too; a private copy here would let the two drift apart silently.
-    const hipHeight = 1.16 * s;
+    // It was 1.16, and a leg spans 1.10 of which `limb()` extends at most 98%:
+    // the feet could not reach the floor at all. Measured over four cached
+    // tracks, the lower foot of every figure hovered a median 0.170 of a build
+    // above it - 0.094 at the tenth percentile - so the cast floated over its
+    // own shadows. It is 0.000 now. At 1.02 a knee bent by 16 degrees puts the foot on the
+    // floor, and `FLOOR` below catches the straighter ones.
+    const hipHeight = 1.02 * s;
     const spineLen = SPINE_LEN * s;
     const shoulderHalf = SHOULDER_HALF * s;
     const upperArm = UPPER_ARM * s;
@@ -4492,12 +4747,11 @@ export class StickMenVisual {
     pose.arms.forEach((arm, side) => {
       const sign = side === 0 ? 1 : -1;
       const shoulder = add(chest, rotY([sign * shoulderHalf, 0, 0], chestYaw));
-      // Lift is amplified and the forearm bends *against* the upper arm rather
-      // than continuing its arc. Adding the elbow to the swing curled the hand
-      // back toward the head, which is why arms never appeared to extend.
-      const swing = arm.swing;
-      const lift = arm.lift * 1.75;
-      const aimed = fromLegacy(swing, lift * sign, arm.elbow);
+      // Drawn as written; see `poseAim`. An arm's swing is written negative
+      // for forward.
+      const aimed = poseAim(-arm.swing, arm.lift * sign, arm.elbow);
+      const flareBy = Math.min(1, Math.max(0, arm.flare ?? 0));
+      const flare = flareBy > 0 ? [sign * flareBy, 0, 0] : null;
       // Elbows break backward, both of them.
       //
       // The bend used to be `sign`, i.e. mirrored per side - so one elbow bent
@@ -4509,15 +4763,18 @@ export class StickMenVisual {
           // Negative: an elbow protrudes *behind* the line from shoulder to hand.
           // Positive put it in front, which is why arms appeared to bend the wrong
           // way at every pose.
-          aimed.elevation, aimed.azimuth, aimed.extend, upperArm, foreArm, -1,
+          aimed.elevation, aimed.azimuth, aimed.extend, upperArm, foreArm, -1, flare,
         ),
         // Out of the trunk, and solved again to reach: see HAND_TORSO_CLEARANCE.
         [sign * shoulderHalf, 0, 0], hipsInChest, HAND_TORSO_CLEARANCE * s,
-        upperArm, foreArm,
+        upperArm, foreArm, flare,
       );
       const elbow = add(shoulder, rotY(solved.joint, chestYaw));
       let hand = add(shoulder, rotY(solved.end, chestYaw));
-      hand = this.applyLag(dancer.lag.hands, side, hand, deltaSec, 8 * dancer.looseness);
+      // A little trail on the hands, varied per dancer so a cast in unison
+      // does not move as one machine. It was a rate of 8, a time constant of
+      // 125ms, which on its own took a beat-rate gesture down to 54%.
+      hand = this.applyLag(dancer.lag.hands, side, hand, deltaSec, 40 * dancer.looseness);
       bones.push({ a: shoulder, b: elbow, w: limbPx });
       bones.push({ a: elbow, b: hand, w: limbPx * 0.95 });
     });
@@ -4528,14 +4785,27 @@ export class StickMenVisual {
     const legs = pose.legs.map((leg, side) => {
       const sign = side === 0 ? 1 : -1;
       const hip = add(root, rotY([sign * shoulderHalf * 0.62, 0, 0], yaw));
-      // Legs spread wider too, so a stance reads as a stance.
-      const freeAim = fromLegacy(leg.swing, leg.lift * sign * 1.35, leg.knee);
+      // A leg's swing is written positive for forward, the opposite of an
+      // arm's, because that is how every table was written.
+      let freeAim = poseAim(leg.swing, leg.lift * sign, leg.knee);
 
       // Where the foot would go if it were merely pointed, which is what the
       // pose tables describe and what planting decisions are measured from.
-      const freeSolved = limb(
+      let freeSolved = limb(
         freeAim.elevation, freeAim.azimuth, freeAim.extend, thigh, shin, 1,
       );
+
+      // Never through the floor, and a foot carrying weight stands on it:
+      // bending a knee is how a dancer sinks, not a way of lifting a foot. A
+      // loaded foot within reach of the floor is put there and the knee solves
+      // for it; a foot that would pass below the floor stands on it too. Done
+      // here, before planting, so a foot is only pinned where it can stand.
+      const reached = add(hip, rotY(freeSolved.end, yaw));
+      const standing = dancer.support[side] > 0.5 && reached[1] < FLOOR + 0.15 * s;
+      if (reached[1] < FLOOR || standing) {
+        freeAim = aimAt(rotY(sub([reached[0], FLOOR, reached[2]], hip), -yaw), legSpan);
+        freeSolved = limb(freeAim.elevation, freeAim.azimuth, freeAim.extend, thigh, shin, 1);
+      }
       return {
         side, hip, freeAim, freeSolved, freeFoot: add(hip, rotY(freeSolved.end, yaw)),
       };
@@ -4570,7 +4840,7 @@ export class StickMenVisual {
       // Blended rather than branched so there is no threshold left to cross.
       foot = this.applyLag(
         dancer.lag.feet, side, foot, deltaSec,
-        14 * dancer.looseness + dancer.plant[side].strength * 400,
+        40 * dancer.looseness + dancer.plant[side].strength * 400,
       );
 
       bones.push({ a: hip, b: knee, w: limbPx * 1.16 });
@@ -4760,19 +5030,19 @@ export class StickMenVisual {
     //
     // Keeping the point alive while the strength eases back down gives the blend
     // something to travel from, so a release is a step rather than a snap.
-    if (!plant.held && load > 0.62) {
+    // Only a foot on the floor can take weight. Without this a figure in the
+    // air planted whichever foot the beat said was loaded, where it hung.
+    const grounded = freeFoot[1] < FLOOR + 0.06 * dancer.build;
+    if (!plant.held && load > 0.62 && grounded) {
       // Pinned where the foot actually is, *not* at floor level.
       //
-      // Snapping the plant to y=0 is the obvious thing and it does not work:
-      // this rig's legs cannot reach the floor. Measured from the proportions in
-      // `drawDancer`, the hip sits at 1.160 build units and a leg spans
-      // 0.56 + 0.54 = 1.100, of which `limb()` will only ever extend 98% - so the
-      // furthest a foot can get from the hip is 1.078, and the floor is 0.082
-      // beyond it. A plant at y=0 would be unreachable on the frame it was made,
-      // release immediately, and pin nothing ever.
-      //
-      // Holding the foot's own position sidesteps the question: it is reachable
-      // by construction, because the foot is already there.
+      // A foot taking weight is usually on the floor, but not always - it can
+      // be landing from a hop, or reaching for the floor with the hips risen -
+      // and a pin it cannot reach releases on the frame it is made and pins
+      // nothing. The hips once sat too high for any foot to reach the floor at
+      // all, and snapping plants to it pinned nothing, ever. Holding the foot's
+      // own position is reachable by construction, because the foot is
+      // already there.
       plant.held = true;
       plant.point = [freeFoot[0], freeFoot[1], freeFoot[2]];
     }

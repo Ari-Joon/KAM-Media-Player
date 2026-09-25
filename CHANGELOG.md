@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased
+
+The stick men dance the song, and the audio stops clipping.
+
+### Changed
+
+- **Stick Men is choreographed from the song.** Each track is planned once: a
+  dance style from its tempo and character, a part for every section - intro,
+  verse, build, chorus, drop, breakdown, outro - and one routine per part, so
+  the second chorus is danced like the first. The lead sings the verses and
+  joins in when the song lifts, the chorus is danced in unison, and each part
+  has its own formation. The plan is seeded by the song, so every viewer sees
+  the same dance; 21 of the 22 cached tracks now open differently, where eight
+  had opened with the same three moves.
+- **The moves are drawn as written.** The conversion from the pose tables was
+  running leg swing backwards (a march lifted its knees behind it), crossing
+  the second arm over the body in most moves, and wrapping lift round behind
+  the back. All 34 moves were rewritten against a corrected conversion, and
+  hands can now go on hips and behind the head.
+- **Motion lands on the beat.** The pose springs were loose enough that a
+  move reached the screen at 10-58% of its size and up to a beat late; the old
+  amplification made up the size and dragged held poses over the heads. The
+  drawn pose now follows each move at 86-100%, and is read 40ms ahead to
+  cancel what lag is left. An arm crosses a head on screen in 7.7% of
+  arm-frames, down from 35.0%.
+- **The figures face the audience and stand on the floor.** They faced away
+  from every camera, and their hips sat too high for a foot to reach the
+  floor. A foot carrying weight now stands on it, and one the move lifts is
+  no longer pinned down.
+- **The side-on camera watches from the wings**, where it stopped stacking
+  the cast one behind another: a figure was hidden in half of that shot's
+  frames, and is in a fifth now.
+- **Every track plays at the same loudness.** Tracks are matched to -14 LUFS
+  and pass through one limiter at -2 dBFS; the median track plays about
+  4.6 dB quieter than before.
+
+### Fixed
+
+- **Clipping.** 22 of the 29 cached tracks decoded above full scale and
+  reached listeners clipped on some paths. None do now.
+- **Crossfades that did not blend.** The fade was aimed at the end of the
+  file, trailing silence and all, so short fades happened in silence. It now
+  starts where the outro falls away, skips the next track's opening silence,
+  and gapless joins no longer leave about three seconds of silence.
+- **Skips that skipped twice**, the doubled "Queue finished", and a track
+  starting after `/stop` when its download landed late.
+- **A Discord avatar that would not load** in favourites and playlists.
+  Animated avatars are fetched as stills, a failed lookup is retried after a
+  minute rather than half an hour, and a refused image is logged.
+- **Arms and legs passing through bodies.** Shins crossed on 17% of
+  dancer-frames and forearms went through the chest on 8% of arm-frames;
+  both are now below 0.01%.
+
 ## 0.9.7 - 2026-09-22
 
 The server says when a newer version is out.

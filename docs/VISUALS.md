@@ -58,16 +58,22 @@ deterministic stroke list rather than accumulated into the canvas.
 ### Stick Men · `img/stickmen.png`
 ![Stick Men](img/stickmen.png)
 
-Dancing figures in a real 3D space under an orbiting camera. Joints are computed
-in body-local coordinates, rotated into the world and projected through a
-perspective camera, which is what makes a turning figure look like it is
-turning. Poses are pure functions of position within the bar, so the cast cannot
-drift out of time however long it runs.
+A troupe dancing in a real 3D space, cut between camera angles on the bar. Each
+song is planned once, before the first step: a dance style from its tempo and
+character, a part for every section - intro, verse, build, chorus, drop,
+breakdown, outro - from how it stands against the rest of the song, and one
+routine per part, so the second chorus is danced like the first. The lead sings
+the verses and joins in when the song lifts; the chorus is danced in unison; each
+part has its own formation. The plan is seeded by the song, so every viewer sees
+the same dance.
 
-Limbs carry secondary motion - hands and feet lag their parent joint through a
-spring, so a fast gesture whips rather than snapping. Feet are *planted* rather
-than pointed, which is what stops the figures skating. Four-bar routines,
-formations, and a cast size taken from the artist's line-up.
+Thirty-four moves, from a two-step to the Charleston and the Y.M.C.A., are
+written as poses over the bar and drawn as written, grown or shrunk about their
+own centre as the song gets bigger. Joints are computed in body-local
+coordinates and projected through a perspective camera, which is what makes a
+turning figure look like it is turning. Feet stand on the floor and are
+*planted* while they carry weight, which stops the figures skating, and the cast
+size comes from the artist's line-up.
 
 ### Vinyl · `img/vinyl.png`
 ![Vinyl](img/vinyl.png)

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { StickMenVisual, PHRASE_BARS, moveForSection, SHOTS, SHOT_PLAN } from '../client/stickmen.js';
+import {
+  StickMenVisual, PHRASE_BARS, SHOTS, SHOT_PLAN, planChoreography,
+} from '../client/stickmen.js';
 
 // The renderer only needs the canvas API's side effects. Recording method calls
 // is unnecessary here because the regression is choreography state, but every
@@ -35,6 +37,58 @@ globalThis.window = { devicePixelRatio: 1 };
 let fakeNow = 0;
 const realNow = performance.now.bind(performance);
 performance.now = () => fakeNow;
+
+// A song built from section levels, with the lanes the planner reads.
+const songScore = (providerId, levels, bpm = 120, character = {}) => {
+  const frames = levels.length * 600;
+  const fill = (value) => Array(frames).fill(value);
+  return {
+    source: { provider_id: providerId },
+    analysis: { is_partial: false, analysed_duration_sec: levels.length * 20 },
+    timing: { tempo_bpm: bpm, meter: 4, beats: [0] },
+    lanes: {
+      fps: 30,
+      frame_count: frames,
+      energy: levels.flatMap((level) => Array(600).fill(level)),
+      punch: levels.flatMap((level) => Array(600).fill(level * 0.4)),
+      brightness: fill(character.brightness ?? 0.42),
+      bass: fill(character.bass ?? 0.3),
+      mid: fill(character.mid ?? 0.3),
+      treble: fill(character.treble ?? 0.2),
+    },
+    sections: levels.map((level, index) => ({
+      index,
+      start_sec: index * 20,
+      end_sec: (index + 1) * 20,
+      energy_mean: level,
+      brightness_mean: 0.35 + level * 0.3,
+    })),
+  };
+};
+
+// Every joint `drawDancer` draws, captured through `project` in its fixed
+// order: 26 points a figure, so a test sees exactly what is on screen rather
+// than a re-derivation that could drift from it. Points 1-2 are the trunk;
+// 10/12 and 14/16 an elbow and hand; 17/18/20 and 21/22/24 a hip, knee and
+// foot; 25 the head.
+const captureJoints = (visual) => {
+  const project = visual.project.bind(visual);
+  let capture = null;
+  visual.project = (point, width, height) => {
+    const result = project(point, width, height);
+    if (capture) capture.push({ world: [point[0], point[1], point[2]], screen: result });
+    return result;
+  };
+  const draw = visual.drawDancer.bind(visual);
+  const drawn = [];
+  visual.drawDancer = (...args) => {
+    capture = [];
+    draw(...args);
+    if (capture.length === 26) drawn.push({ dancer: args[3], s: args[3].build, at: capture });
+    capture = null;
+  };
+  return drawn;
+};
 
 const frameCount = 2400;
 const score = {
@@ -157,28 +211,111 @@ assert.ok(Number.isFinite(centre.x) && Number.isFinite(centre.y), 'projection is
 assert.ok(centre.depth >= 0.45, 'depth clamp did not hold');
 assert.ok(centre.scale > 0, 'projection scale must be positive');
 
-// --- Theme routines --------------------------------------------------------
-// THEME_ROUTINES named 'sway', which is a pose field rather than a move, so
-// MOVES['sway'] was undefined and the next frame threw - taking Stick Men off
-// the menu for the rest of the session via the render guard in main.js. Every
-// theme routine must now resolve to real moves.
-const themed = new StickMenVisual(canvas, 2);
-for (const [theme, arousal] of [['romance', 0.1], ['romance', 0.9],
-  ['melancholy', 0.1], ['melancholy', 0.9]]) {
-  const themedScore = {
-    ...score,
-    choreography: undefined,
-    lyrics: { sections: [{ valence: 0, arousal, density: 1, theme, keywords: [] }] },
+// --- The plan ---------------------------------------------------------------
+// Every track without supplied choreography is danced from `planChoreography`:
+// one style from the song's tempo and character, a part in the song for each
+// section from how it stands against the rest, and one routine per part so the
+// second chorus is danced like the first.
+{
+  // One cached track's section energies, as the planner's own notes quote
+  // them: intro, chorus, verse, bigger chorus, bridge, outro.
+  const energies = [0.26, 0.57, 0.38, 0.68, 0.46, 0.27];
+  const plan = planChoreography(songScore('plan-test', energies));
+  const roles = plan.sections.map((section) => section.role);
+
+  assert.equal(roles[0], 'intro', `the song should open as an intro, got ${roles.join(',')}`);
+  assert.equal(roles.at(-1), 'outro', `the song should close as an outro, got ${roles.join(',')}`);
+  const loudest = energies.indexOf(Math.max(...energies));
+  assert.ok(['chorus', 'drop'].includes(roles[loudest]),
+    `the loudest section should be danced as the hook, got ${roles[loudest]}`);
+
+  // The same song plans the same dance, so every viewer sees one performance.
+  assert.deepEqual(planChoreography(songScore('plan-test', energies)), plan,
+    'the plan must be a property of the song');
+
+  // A part of the song that comes back is danced the same way again.
+  for (const role of new Set(roles)) {
+    const routines = plan.sections.filter((section) => section.role === role)
+      .map((section) => section.routine.join());
+    assert.equal(new Set(routines).size, 1, `every ${role} should dance one routine`);
+  }
+
+  // Harder where the song is bigger.
+  const intensities = plan.sections.map((section) => section.intensity);
+  assert.ok(intensities[loudest] > intensities[0] + 0.3,
+    `the loudest section should be danced harder: ${intensities.map((i) => i.toFixed(2)).join(',')}`);
+
+  // Seeded per song. The index-driven choice this replaced opened every
+  // mid-energy song with the same move; forty songs identical in every other
+  // way must not dance alike.
+  const openings = new Set(Array.from({ length: 40 }, (_, i) => planChoreography(
+    songScore(`song-${i}`, energies),
+  ).sections[2].routine.join()));
+  assert.ok(openings.size >= 6, `forty songs shared ${openings.size} verse routines`);
+
+  // Every move can be reached, or it has been authored and can never be seen.
+  // `sing` is the lead's and `idle` is for near-silence; both are assigned
+  // outside the plan.
+  let seed = 7;
+  const random = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
   };
-  themed.sectionIndex = -1;
-  assert.doesNotThrow(() => {
-    for (let frame = 0; frame < 8; frame++) {
-      fakeNow += 1000 / 60;
-      themed.render(themedScore, frame * phraseSeconds);
+  const reached = new Set();
+  for (let i = 0; i < 300; i++) {
+    const levels = Array.from({ length: 8 }, () => 0.15 + random() * 0.6);
+    const corpusScore = songScore(`corpus-${i}`, levels, 70 + random() * 100, {
+      brightness: 0.3 + random() * 0.3,
+      bass: 0.2 + random() * 0.25,
+      mid: 0.2 + random() * 0.2,
+      treble: 0.1 + random() * 0.2,
+    });
+    for (const section of planChoreography(corpusScore).sections) {
+      for (const move of section.routine) reached.add(move);
     }
-  }, `theme "${theme}" at arousal ${arousal} threw during render`);
-  assert.ok(themed.dancers.every((dancer) => typeof dancer.move === 'string'),
-    `theme "${theme}" left a dancer without a move`);
+  }
+  const vocabulary = [
+    'step', 'reach', 'run', 'floss', 'robot', 'spin', 'wave', 'jump', 'groove', 'march',
+    'clap', 'point', 'headbang', 'shimmy', 'kick', 'slide', 'moonwalk', 'twist',
+    'charleston', 'runningman', 'dougie', 'gangnam', 'macarena', 'vogue', 'cabbagepatch',
+    'sprinkler', 'discopoint', 'twostep', 'shuffle', 'ymca', 'salsa', 'sway',
+  ];
+  const never = vocabulary.filter((move) => !reached.has(move));
+  assert.equal(never.length, 0, `the plan never chooses: ${never.join(', ')}`);
+}
+
+// The lead sings the verses and joins the dance when the song lifts; the chorus
+// is danced in unison, and each part of the song has its own formation.
+{
+  const energies = [0.26, 0.57, 0.38, 0.68, 0.46, 0.27];
+  const songPlan = planChoreography(songScore('lead-test', energies));
+  const visual = new StickMenVisual(canvas, 4);
+  const song = songScore('lead-test', energies);
+  const formations = new Map();
+  for (const [index, entry] of songPlan.sections.entries()) {
+    for (let frame = 0; frame < 30; frame++) {
+      fakeNow += 1000 / 60;
+      visual.render(song, index * 20 + 4 + frame / 60);
+    }
+    assert.equal(visual.role, entry.role, `section ${index} should be danced as its planned part`);
+    const lead = visual.dancers[0].move;
+    if (['chorus', 'drop', 'build'].includes(entry.role)) {
+      assert.notEqual(lead, 'sing', `the lead should dance the ${entry.role}, not sing it`);
+    } else {
+      assert.equal(lead, 'sing', `the lead should sing the ${entry.role}, got ${lead}`);
+    }
+    if (entry.role === 'chorus' || entry.role === 'drop') {
+      const backing = visual.dancers.slice(1).map((dancer) => dancer.move);
+      assert.ok(backing.every((move) => move === visual.move),
+        `the ${entry.role} should be danced in unison, got ${backing.join(',')}`);
+    }
+    const seen = formations.get(entry.role) ?? new Set();
+    seen.add(visual.formation);
+    formations.set(entry.role, seen);
+  }
+  for (const [role, seen] of formations) {
+    assert.equal(seen.size, 1, `every ${role} should stand in one formation`);
+  }
 }
 
 // --- Foot planting ---------------------------------------------------------
@@ -295,13 +432,14 @@ assert.ok(contribution.every((value) => value <= 1e-9),
   'preparation should never raise the hips');
 
 // The deepest point must fall in the run-up to the beat rather than after it.
-// An input peaking on the beat emerges at phase 0.13 once the pose springs have
-// lagged it, which is a second follow-through and the bug this pins down.
+// An input peaking on the beat emerged at phase 0.13 once the pose springs had
+// lagged it, which is a second follow-through and the bug this pins down. It
+// measures 0.83 now.
 const deepest = contribution.indexOf(Math.min(...contribution)) / contribution.length;
 assert.ok(deepest > 0.7,
   `preparation should bottom out before the beat, got phase ${deepest.toFixed(2)}`);
 
-// And it has to be big enough to see. Measured at 0.0096 of hip travel, 27% of
+// And it has to be big enough to see. Measured at 0.0119 of hip travel, 25% of
 // the existing beat bounce; 0.003 is a floor well clear of numerical noise.
 const depth = Math.abs(Math.min(...contribution));
 assert.ok(depth > 0.003, `preparation is too small to read: ${depth.toFixed(5)}`);
@@ -349,7 +487,6 @@ const movesAtEnergy = (energy) => {
 
 const silent = movesAtEnergy(0.02);
 const quietBand = movesAtEnergy(0.12);
-const loud = movesAtEnergy(0.45);
 
 // Near-silence keeps its stillness: that case is not a bug.
 assert.ok(silent.moves.slice(1).every((move) => move === 'idle'),
@@ -362,18 +499,33 @@ assert.ok(quietBand.moves.every((move) => move !== 'idle'),
 assert.ok(quietBand.travel > silent.travel * 1.15,
   `quiet sections should move more than silent ones: ${quietBand.travel.toFixed(2)} vs ${silent.travel.toFixed(2)}`);
 
-// And it must still read as quieter than a loud one, or the fix has simply
-// replaced one wrong answer with another.
-assert.ok(loud.travel > quietBand.travel * 1.5,
-  `loud sections should clearly outpace quiet ones: ${loud.travel.toFixed(2)} vs ${quietBand.travel.toFixed(2)}`);
-
-// `sway` must be reachable from every table that can name it, or the move that
-// exists to fix this dead-ends back into the general vocabulary.
-const swayVisual = new StickMenVisual(canvas, 2);
-swayVisual.mood = { theme: 'melancholy', arousal: 0.1, valence: -0.5, density: 0 };
-const melancholy = swayVisual.routineFor(score.sections[0]);
-assert.ok(melancholy.includes('sway'),
-  `the melancholy routine should now keep its sway: ${melancholy.join(',')}`);
+// And a quiet passage must still read quieter than the loud part of the same
+// song, or the fix has simply replaced one wrong answer with another. Judged
+// within one song, because that is how the dance is planned: a section's part
+// is decided against the rest of its song, so a lone section at any level is
+// that song's intro.
+{
+  const song = songScore('dynamics', [0.18, 0.18, 0.62, 0.62, 0.18, 0.62]);
+  const visual = new StickMenVisual(canvas, 3);
+  const travelIn = (section) => {
+    let travel = 0;
+    let previous = null;
+    for (let frame = 0; frame < 600; frame++) {
+      fakeNow += 1000 / 60;
+      visual.render(song, section * 20 + 4 + frame / 60);
+      const hand = visual.dancers[1].lag.hands[0];
+      if (previous && frame > 60) {
+        travel += Math.hypot(hand[0] - previous[0], hand[1] - previous[1], hand[2] - previous[2]);
+      }
+      previous = hand.slice();
+    }
+    return travel;
+  };
+  const quietTravel = travelIn(1);
+  const loudTravel = travelIn(3);
+  assert.ok(loudTravel > quietTravel * 1.5,
+    `the loud part should clearly outpace the quiet one: ${loudTravel.toFixed(2)} vs ${quietTravel.toFixed(2)}`);
+}
 
 // --- Phrase structure ------------------------------------------------------
 // A routine needs a shape across its phrase, not just a repeating bar. These
@@ -462,15 +614,15 @@ const walked = walkPhrase({ forceMove: 'step' });
 
 // Unison at the phrase boundaries, canon in between. Every figure used to carry
 // a fixed offset, so the cast was permanently and identically out of step and
-// therefore never hit anything together. Measured at 4.4x; 2x is a floor that
+// therefore never hit anything together. Measured at 4.6x; 2x is a floor that
 // still fails outright if the canon collapses to a constant.
 const ends = (walked.spread[0] + walked.spread[7]) / 2;
 const middle = (walked.spread[3] + walked.spread[4]) / 2;
 assert.ok(middle > ends * 2,
   `cast should spread mid-phrase and rejoin at its edges: ends ${ends.toFixed(5)}, middle ${middle.toFixed(5)}`);
 
-// The phrase must build. Measured at 117.3 to 128.2 degrees of arm swing range
-// on a held groove; 4% is a floor that still fails outright if the arc is
+// The phrase must build. Measured at 62.8 to 73.6 degrees of arm swing range
+// on this held step; 4% is a floor that still fails outright if the arc is
 // removed or flattened, without being a tripwire on pose tweaks.
 const peakRange = Math.max(...walked.range);
 const floorRange = Math.min(...walked.range);
@@ -537,8 +689,8 @@ const NAMED_DANCES = [
 
 const DEG = Math.PI / 180;
 const JOINT_LIMITS = {
-  armSwing: [-170 * DEG, 45 * DEG],
-  armLift: [-105 * DEG, 105 * DEG],
+  armSwing: [-190 * DEG, 60 * DEG],
+  armLift: [-60 * DEG, 125 * DEG],
   elbow: [5 * DEG, 112 * DEG],
   legSwing: [-75 * DEG, 95 * DEG],
   legLift: [-45 * DEG, 45 * DEG],
@@ -589,20 +741,6 @@ for (const name of NAMED_DANCES) {
   assert.equal(pinned, 0,
     `dance "${name}" left ${pinned}/${checkedJoints} joints pinned against a limit`);
 }
-
-// Every named dance must be reachable from the selection tables, or it has been
-// authored and can never be seen.
-const reachable = new Set();
-for (let index = 0; index < 40; index += 1) {
-  for (const energy of [0.10, 0.30, 0.45, 0.60, 0.80]) {
-    reachable.add(moveForSection({
-      index, energy_mean: energy, brightness_mean: 0.2 + (index % 5) * 0.15,
-    }));
-  }
-}
-const unreachable = NAMED_DANCES.filter((name) => !reachable.has(name));
-assert.equal(unreachable.length, 0,
-  `these dances can never be chosen: ${unreachable.join(', ')}`);
 
 // A drop must reach the cast, not only the camera. Everybody hits together, so
 // the spread of the figures' vertical offsets should fall sharply while the
@@ -683,114 +821,158 @@ for (const shot of SHOTS) {
     `shot "${shot.name}" looks down ${worst.toFixed(0)} degrees at the top of its drift`);
 }
 
-// --- Hand-to-head clearance -------------------------------------------------
-// A hand must not sit level with, and beside, the figure's own head - it merges
-// with the head circle and the figure loses the one feature that says which way
-// it is facing.
+// --- Arms clear of the head -----------------------------------------------------
+// An arm drawn across the head merges into it, and the figure reads as having
+// its arm stuck to its head - the complaint that ran through three rounds of
+// fixes to an angle-space model of where a hand would be. Measured here as the
+// viewer sees it: the drawn arm against the drawn head, through the square-on
+// wide shot, where the pose is to blame rather than the angle.
 //
-// The kinematics are recomputed here from the pose rather than read out of the
-// renderer, for the same reason the camera basis above is: `drawDancer` keeps
-// its joint positions in locals, and a clearance that silently stopped being
-// applied would leave every other assertion in this file perfectly green.
-//
-// Two rates are measured, because the first one alone was not enough. Over a
-// six-figure cast at 60fps, hands *beside* the head run at 14.11% disabled and
-// 8.36% at the current clearance, while hands *merged into* the head run at
-// 2.225% and 0.345%. The beside figure was the original brief and it passed at
-// 12.44% while the result still looked wrong on screen; merging is what a
-// viewer actually notices. Both thresholds sit between disabled and current, so
-// removing the clearance fails outright without making pose tweaks a tripwire.
+// Before the moves were rewritten, 39.6% of arm-frames in that shot crossed a
+// head across four cached tracks, and 35.0% over every shot; on this track it
+// measures 1.30% now. Arms must still go up, so raised hands are required too:
+// 14.0% of arm-frames have a hand above the head.
 {
-  const DEG = Math.PI / 180;
-  // Proportions and reach limits as `stickmen.js` defines them.
-  const SHOULDER_HALF = 0.20;
-  const SPAN = 0.36 + 0.34;
-  const BODY_HEIGHT = 0.56 + 0.54 + 0.52 + 0.42;
-  const HEAD_RADIUS = BODY_HEIGHT * 0.100;
-  const HEAD_RISE = HEAD_RADIUS * 1.5;
-
-  const rotX = ([x, y, z], a) => [x, y * Math.cos(a) - z * Math.sin(a),
-    y * Math.sin(a) + z * Math.cos(a)];
-  const rotZ = ([x, y, z], a) => [x * Math.cos(a) - y * Math.sin(a),
-    x * Math.sin(a) + y * Math.cos(a), z];
-
-  const besideHead = (pose, side) => {
-    const sign = side === 0 ? 1 : -1;
-    const arm = pose.arms[side];
-    const elevation = -Math.PI / 2 - arm.swing;
-    const azimuth = arm.lift * 1.75 * sign * 1.5;
-    const extend = Math.max(0.42, Math.min(1, 1 - Math.abs(arm.elbow) / (Math.PI * 0.9)));
-    const reach = SPAN * (0.42 + (0.98 - 0.42) * extend);
-    const radius = reach * Math.cos(elevation);
-    const hand = [sign * SHOULDER_HALF + Math.sin(azimuth) * radius,
-      reach * Math.sin(elevation), Math.cos(azimuth) * radius];
-    const head = rotZ(rotX([0, HEAD_RISE, 0], pose.head.swing), pose.head.lift);
-    const level = Math.abs(hand[1] - head[1]) < HEAD_RADIUS;
-    const dist = Math.hypot(hand[0] - head[0], hand[2] - head[2]);
-    // `beside` is the original brief. `merged` is what a viewer actually sees:
-    // the hand inside the head circle, so the figure loses its face.
-    return { beside: level && dist < 0.45, merged: level && dist < HEAD_RADIUS };
+  const frames = 2400;
+  const song = songScore('arms-test', [0.3, 0.55, 0.42, 0.7, 0.5, 0.35]);
+  const visual = new StickMenVisual(canvas, 6);
+  visual.setCount(6);
+  visual.pickShot = function pickShot() {
+    this.shot = SHOTS.find((shot) => shot.name === 'wide');
+    this.shotTarget = null;
+    this.pendingCut = true;
   };
-
-  const frames = 1800;
-  const clearanceScore = {
-    analysis: { is_partial: false, analysed_duration_sec: 60 },
-    timing: { tempo_bpm: 120, meter: 4, beats: [0] },
-    lanes: {
-      fps: 30,
-      frame_count: frames,
-      energy: Array.from({ length: frames }, (_, i) => 0.35 + 0.4 * Math.abs(Math.sin(i / 300))),
-      punch: Array.from({ length: frames }, (_, i) => 0.3 + 0.4 * Math.abs(Math.sin(i / 150))),
-    },
-    sections: Array.from({ length: 3 }, (_, i) => ({
-      index: i,
-      start_sec: i * 20,
-      end_sec: (i + 1) * 20,
-      energy_mean: 0.4 + i * 0.15,
-      brightness_mean: 0.35 + i * 0.15,
-    })),
-    choreography: { sections: Array.from({ length: 3 }, () => ({ routine: null })) },
-  };
-
-  const clearanceVisual = new StickMenVisual(canvas, 2);
-  clearanceVisual.setCount(6);
-
-  let handFrames = 0;
-  let beside = 0;
-  let merged = 0;
-  for (let frame = 0; frame < 60 * 60; frame++) {
-    fakeNow += 1000 / 60;
-    clearanceVisual.render(clearanceScore, frame / 60);
-    for (const dancer of clearanceVisual.dancers) {
-      for (const side of [0, 1]) {
-        handFrames += 1;
-        const near = besideHead(dancer.pose, side);
-        if (near.beside) beside += 1;
-        if (near.merged) merged += 1;
+  const drawn = captureJoints(visual);
+  let arms = 0;
+  let onHead = 0;
+  let raised = 0;
+  for (let frame = 0; frame < frames; frame++) {
+    fakeNow += 1000 / 30;
+    drawn.length = 0;
+    visual.render(song, frame / 30);
+    for (const { s, at } of drawn) {
+      const figurePx = (0.56 + 0.54 + 0.52 + 0.42) * s * at[0].screen.scale;
+      const headPx = Math.max(4, figurePx * 0.1);
+      const limbPx = Math.max(3, figurePx * 0.105);
+      const toSegment = (p, a, b) => {
+        const abx = b.x - a.x;
+        const aby = b.y - a.y;
+        const t = Math.max(0, Math.min(1,
+          ((p.x - a.x) * abx + (p.y - a.y) * aby) / Math.max(1e-9, abx * abx + aby * aby)));
+        return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
+      };
+      const head = at[25].screen;
+      for (const [shoulder, elbow, hand] of [[9, 10, 12], [13, 14, 16]]) {
+        arms += 1;
+        const gap = Math.min(
+          toSegment(head, at[shoulder].screen, at[elbow].screen),
+          toSegment(head, at[elbow].screen, at[hand].screen),
+        );
+        if (gap < headPx + 0.25 * limbPx) onHead += 1;
+        if (at[hand].world[1] > at[25].world[1]) raised += 1;
       }
     }
   }
+  const rate = (onHead / arms) * 100;
+  const raisedRate = (raised / arms) * 100;
+  assert.ok(arms > 20000, `too few arm-frames sampled (${arms})`);
+  assert.ok(rate < 4,
+    `an arm crossed a head on ${rate.toFixed(2)}% of arm-frames in the wide shot`);
+  assert.ok(raisedRate > 5,
+    `hands went above the head on only ${raisedRate.toFixed(2)}% of arm-frames`);
+}
 
-  const rate = (beside / handFrames) * 100;
-  const mergeRate = (merged / handFrames) * 100;
-  assert.ok(handFrames > 40000, `too few hand-frames sampled (${handFrames})`);
-  assert.ok(rate < 11,
-    `hands sat beside the head on ${rate.toFixed(2)}% of frames; the clearance `
-    + 'is not being applied');
-  // The clearance must not become a ban. Hands genuinely pass the head, and a
-  // rate near zero would mean raised-arm poses had been flattened out entirely.
-  assert.ok(rate > 5,
-    `hands almost never reach the head (${rate.toFixed(2)}%); the clearance has `
-    + 'stopped being a repulsion and started being a clamp');
+// --- Moves as written -------------------------------------------------------------
+// What a move asks for has to reach the screen, and in the right direction.
+{
+  // The springs follow the moves. At stiffness 16 the arms showed a tenth of a
+  // clap's travel and a third of a march's knee lift, up to a beat late; here
+  // a figure whose springs run to convergence every frame is the reference.
+  // Measured at 90% for the clap and 99% for the march.
+  const rangeOf = (name, converge) => {
+    const visual = new StickMenVisual(canvas, 1);
+    const dancer = visual.dancers[0];
+    Object.assign(visual, { energy: 0.55, punch: 0.45, intensity: 0.6, move: name, bpm: 120 });
+    dancer.move = name;
+    dancer.connector = name;
+    let low = [Infinity, Infinity];
+    let high = [-Infinity, -Infinity];
+    for (let frame = 0; frame < 480; frame++) {
+      const beatCount = (frame / 60) * 2;
+      for (let k = 0; k < (converge ? 30 : 1); k++) visual.updatePosition(dancer, beatCount, 4, 1 / 60);
+      if (frame < 240) continue;
+      const values = [dancer.pose.arms[0].lift, dancer.pose.legs[0].knee];
+      low = low.map((value, i) => Math.min(value, values[i]));
+      high = high.map((value, i) => Math.max(value, values[i]));
+    }
+    return high.map((value, i) => value - low[i]);
+  };
+  for (const [name, joint, label] of [['clap', 0, 'arm lift'], ['march', 1, 'knee']]) {
+    const drawnRange = rangeOf(name, false)[joint];
+    const targetRange = rangeOf(name, true)[joint];
+    assert.ok(drawnRange > targetRange * 0.8,
+      `${name} drew ${((drawnRange / targetRange) * 100).toFixed(0)}% of its ${label} travel`);
+  }
 
-  // The assertion above passed at 12.44% while the visualisation still looked
-  // wrong, because it counts hands *near* the head rather than hands *in* it.
-  // Merging is what the eye picks up, it was 1.481% at the old clearance and
-  // 0.345% at the current one, so this is the assertion that would have caught
-  // the complaint. Threshold sits between the two.
-  assert.ok(mergeRate < 0.8,
-    `hands merged into the head on ${mergeRate.toFixed(3)}% of frames; the `
-    + 'clearance is too weak to keep the face readable');
+  // Legs as the tables write them: a march lifts its knee to the hip, a kick
+  // goes forward, and a Charleston flicks its heel back. Forward is toward the
+  // audience, which the figures face. The conversion that drew them ran leg
+  // swing backwards, so every one of these went the other way; measured now,
+  // the march's knee rises 0.25 of a build above the hip and the kick reaches
+  // 0.83 in front of it.
+  const legsOf = (name) => {
+    const visual = new StickMenVisual(canvas, 1);
+    const dancer = visual.dancers[0];
+    const drawn = captureJoints(visual);
+    const frames = [];
+    for (let frame = 0; frame < 480; frame++) {
+      fakeNow += 1000 / 60;
+      drawn.length = 0;
+      visual.render(score, 60 + frame / 60);
+      dancer.move = name;
+      dancer.connector = name;
+      dancer.transitionBeats = 0;
+      if (frame > 120 && drawn.length) frames.push(drawn[0]);
+    }
+    return frames;
+  };
+  const facingOf = ({ dancer }) => [Math.sin(dancer.facing), Math.cos(dancer.facing)];
+  const ahead = (frame, point) => {
+    const [fx, fz] = facingOf(frame);
+    const hip = frame.at[1].world;
+    return ((point[0] - hip[0]) * fx + (point[2] - hip[2]) * fz) / frame.s;
+  };
+  const march = legsOf('march');
+  const highestKnee = Math.max(...march.map((frame) => Math.max(
+    frame.at[18].world[1] - frame.at[17].world[1], frame.at[22].world[1] - frame.at[21].world[1],
+  ) / frame.s));
+  assert.ok(highestKnee > -0.1, `a march should lift a knee to the hip, got ${highestKnee.toFixed(2)}`);
+  const kick = legsOf('kick');
+  const furthestKick = Math.max(...kick.map((frame) => Math.max(
+    ahead(frame, frame.at[20].world), ahead(frame, frame.at[24].world),
+  )));
+  assert.ok(furthestKick > 0.5, `a kick should go forward, reached ${furthestKick.toFixed(2)}`);
+  const charleston = legsOf('charleston');
+  const furthestFlick = Math.min(...charleston.map((frame) => Math.min(
+    ahead(frame, frame.at[20].world), ahead(frame, frame.at[24].world),
+  )));
+  assert.ok(furthestFlick < -0.25, `a Charleston should flick back, reached ${furthestFlick.toFixed(2)}`);
+
+  // A clap closes in front of the chest, facing the room.
+  const clap = legsOf('clap');
+  const handsAhead = clap.map((frame) => (ahead(frame, frame.at[12].world)
+    + ahead(frame, frame.at[16].world)) / 2);
+  const inFront = handsAhead.filter((value) => value > 0.2).length / handsAhead.length;
+  assert.ok(inFront > 0.9, `a clap's hands should be in front of the body, ${(inFront * 100).toFixed(0)}% were`);
+
+  // Feet stand on the floor. The hips sat too high for a leg to reach it and
+  // every figure hovered a median 0.170 of a build above its own shadow.
+  const lowest = [...march, ...kick, ...clap].map((frame) => Math.min(
+    frame.at[20].world[1], frame.at[24].world[1],
+  ) / frame.s).sort((a, b) => a - b);
+  const medianLowest = lowest[Math.floor(lowest.length / 2)];
+  assert.ok(medianLowest < 0.03, `feet hover ${medianLowest.toFixed(3)} above the floor`);
+  assert.ok(lowest[0] > -0.005, `a foot went through the floor, to ${lowest[0].toFixed(3)}`);
 }
 
 // --- Limbs stay out of bodies ---------------------------------------------------
@@ -844,21 +1026,7 @@ for (const shot of SHOTS) {
 
   const visual = new StickMenVisual(canvas, 6);
   visual.setCount(6);
-  const project = visual.project.bind(visual);
-  let capture = null;
-  visual.project = (point, width, height) => {
-    if (capture) capture.push([point[0], point[1], point[2]]);
-    return project(point, width, height);
-  };
-  const draw = visual.drawDancer.bind(visual);
-  const drawn = [];
-  visual.drawDancer = (...args) => {
-    capture = [];
-    draw(...args);
-    // 26 points is a whole figure; fewer means it was too small to draw.
-    if (capture.length === 26) drawn.push({ s: args[3].build, at: capture });
-    capture = null;
-  };
+  const drawn = captureJoints(visual);
 
   let hands = 0;
   let through = 0;
@@ -869,7 +1037,8 @@ for (const shot of SHOTS) {
     fakeNow += 1000 / 30;
     drawn.length = 0;
     visual.render(limbScore, frame / 30);
-    for (const { s, at } of drawn) {
+    for (const { s, at: points } of drawn) {
+      const at = points.map((point) => point.world);
       figures += 1;
       // Points 1-2 are the trunk; 10/12 and 14/16 an elbow and hand; 18/20 and
       // 22/24 a knee and foot - drawDancer's bone order.
@@ -886,18 +1055,23 @@ for (const shot of SHOTS) {
   const crossedRate = (crossed / figures) * 100;
   const medianStance = stance[Math.floor(stance.length / 2)];
 
-  // 9.71% before the clearance, 2.71% after.
-  assert.ok(throughRate < 6,
+  // 9.71% before the clearance, 2.71% after, 0.28% once the conversion
+  // stopped folding the second arm across the chest.
+  assert.ok(throughRate < 2,
     `a forearm passed through the torso on ${throughRate.toFixed(2)}% of hand-frames`);
-  // 17.11% before the separation, 1.96% after.
-  assert.ok(crossedRate < 8,
+  // 17.11% before the separation, 1.96% after, 0.01% once leg lift spread
+  // the stance as the tables meant it to.
+  assert.ok(crossedRate < 2,
     `shins passed through each other on ${crossedRate.toFixed(2)}% of dancer-frames`);
-  // 0.375 before, 0.424 after. A gap past the hips' own spacing splays every
-  // stance - it measured 0.521 against 0.344 on the cached tracks - so this is
-  // the ceiling that keeps the fix from becoming the limp.
-  assert.ok(medianStance < 0.47,
+  // 0.447 since the tables were rewritten: feet a little outside the
+  // shoulders. A stance past about half a build reads as splayed - an earlier
+  // leg separation pushed it to 0.521 and the figures limped - and one under
+  // the hips' own spacing, 0.248, reads as feet standing on each other.
+  assert.ok(medianStance < 0.5,
     `the median stance is ${medianStance.toFixed(3)}, splayed past a dancer's natural width`);
+  assert.ok(medianStance > 0.3,
+    `the median stance is ${medianStance.toFixed(3)}, narrower than the hips`);
 }
 
 performance.now = realNow;
-console.log('StickMenVisual: 65/65 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops, head clearance, limbs out of bodies)');
+console.log('StickMenVisual: 74/74 pass (the plan, the lead, planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops, arms clear of the head, moves as written, limbs out of bodies)');
