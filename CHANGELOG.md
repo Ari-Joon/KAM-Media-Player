@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.8 - 2026-09-25
 
 The stick men dance the song, and the audio stops clipping.
 
