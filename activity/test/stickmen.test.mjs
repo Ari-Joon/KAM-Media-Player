@@ -793,5 +793,111 @@ for (const shot of SHOTS) {
     + 'clearance is too weak to keep the face readable');
 }
 
+// --- Limbs stay out of bodies ---------------------------------------------------
+// Measured on the joints `drawDancer` actually draws, captured through
+// `project`: every drawn point passes through it, in a fixed order, so this
+// sees exactly what is on screen rather than a re-derivation that could drift
+// from it. The same method as the audit behind HAND_TORSO_CLEARANCE and
+// MIN_LIMB_GAP, run here on a synthetic track so the suite needs no cached
+// audio. Numbers for this track are in the assertions.
+{
+  const minus = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const gap = (p1, q1, p2, q2) => {
+    // Closest approach of two segments, sampled finely enough for a test.
+    let best = Infinity;
+    for (let i = 0; i <= 12; i++) {
+      const a = [p1[0] + (q1[0] - p1[0]) * i / 12, p1[1] + (q1[1] - p1[1]) * i / 12,
+        p1[2] + (q1[2] - p1[2]) * i / 12];
+      const d = minus(q2, p2);
+      const t = Math.max(0, Math.min(1, dot(minus(a, p2), d) / Math.max(1e-12, dot(d, d))));
+      const b = [p2[0] + d[0] * t, p2[1] + d[1] * t, p2[2] + d[2] * t];
+      best = Math.min(best, Math.hypot(...minus(a, b)));
+    }
+    return best;
+  };
+
+  // drawDancer's own proportions, per unit of build.
+  const LIMB = (0.56 + 0.54 + 0.52 + 0.42) * 0.105;
+  const TORSO_R = (LIMB * 2.10) / 2;
+  const LIMB_R = LIMB / 2;
+
+  const frames = 1800;
+  const limbScore = {
+    analysis: { is_partial: false, analysed_duration_sec: 60 },
+    timing: { tempo_bpm: 124, meter: 4, beats: [0] },
+    lanes: {
+      fps: 30,
+      frame_count: frames,
+      energy: Array.from({ length: frames }, (_, i) => 0.3 + 0.5 * Math.abs(Math.sin(i / 240))),
+      punch: Array.from({ length: frames }, (_, i) => 0.25 + 0.5 * Math.abs(Math.sin(i / 110))),
+    },
+    sections: Array.from({ length: 4 }, (_, i) => ({
+      index: i,
+      start_sec: i * 15,
+      end_sec: (i + 1) * 15,
+      energy_mean: 0.3 + i * 0.15,
+      brightness_mean: 0.3 + i * 0.12,
+    })),
+    choreography: { sections: Array.from({ length: 4 }, () => ({ routine: null })) },
+  };
+
+  const visual = new StickMenVisual(canvas, 6);
+  visual.setCount(6);
+  const project = visual.project.bind(visual);
+  let capture = null;
+  visual.project = (point, width, height) => {
+    if (capture) capture.push([point[0], point[1], point[2]]);
+    return project(point, width, height);
+  };
+  const draw = visual.drawDancer.bind(visual);
+  const drawn = [];
+  visual.drawDancer = (...args) => {
+    capture = [];
+    draw(...args);
+    // 26 points is a whole figure; fewer means it was too small to draw.
+    if (capture.length === 26) drawn.push({ s: args[3].build, at: capture });
+    capture = null;
+  };
+
+  let hands = 0;
+  let through = 0;
+  let figures = 0;
+  let crossed = 0;
+  const stance = [];
+  for (let frame = 0; frame < frames; frame++) {
+    fakeNow += 1000 / 30;
+    drawn.length = 0;
+    visual.render(limbScore, frame / 30);
+    for (const { s, at } of drawn) {
+      figures += 1;
+      // Points 1-2 are the trunk; 10/12 and 14/16 an elbow and hand; 18/20 and
+      // 22/24 a knee and foot - drawDancer's bone order.
+      for (const [elbow, hand] of [[at[10], at[12]], [at[14], at[16]]]) {
+        hands += 1;
+        if (gap(elbow, hand, at[1], at[2]) < TORSO_R * s * 0.8) through += 1;
+      }
+      if (gap(at[18], at[20], at[22], at[24]) < LIMB_R * s) crossed += 1;
+      stance.push(Math.hypot(at[20][0] - at[24][0], at[20][2] - at[24][2]) / s);
+    }
+  }
+  stance.sort((a, b) => a - b);
+  const throughRate = (through / hands) * 100;
+  const crossedRate = (crossed / figures) * 100;
+  const medianStance = stance[Math.floor(stance.length / 2)];
+
+  // 9.71% before the clearance, 2.71% after.
+  assert.ok(throughRate < 6,
+    `a forearm passed through the torso on ${throughRate.toFixed(2)}% of hand-frames`);
+  // 17.11% before the separation, 1.96% after.
+  assert.ok(crossedRate < 8,
+    `shins passed through each other on ${crossedRate.toFixed(2)}% of dancer-frames`);
+  // 0.375 before, 0.424 after. A gap past the hips' own spacing splays every
+  // stance - it measured 0.521 against 0.344 on the cached tracks - so this is
+  // the ceiling that keeps the fix from becoming the limp.
+  assert.ok(medianStance < 0.47,
+    `the median stance is ${medianStance.toFixed(3)}, splayed past a dancer's natural width`);
+}
+
 performance.now = realNow;
-console.log('StickMenVisual: 62/62 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops, head clearance)');
+console.log('StickMenVisual: 65/65 pass (planting, anticipation, quiet, phrase, canon, 15 dances, staging, drops, head clearance, limbs out of bodies)');

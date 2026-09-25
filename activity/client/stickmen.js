@@ -261,6 +261,167 @@ function clearHead(target, visible, state, deltaSec) {
 const MAX_TUCK_SEC = 3;
 
 /**
+ * Nearest a hand or elbow may come to the torso's axis, as a fraction of build.
+ *
+ * The drawn trunk is 0.45 of a build wide and a hand 0.21, so their surfaces
+ * meet at about 0.33. Measured on the joints `drawDancer` actually draws - six
+ * dancers across four cached tracks, 200,064 dancer-frames - a forearm passed
+ * through the torso on 8.07% of hand-frames and a hand sat hidden inside it on
+ * 4.27%.
+ *
+ * The angle-based spread could not prevent it, and was the larger cause.
+ * `repel` keeps a lift away from zero on whichever side it is on, so an arm
+ * authored across the chest was pushed *further* across, to -41 degrees - and
+ * lift reaches the aim amplified 2.625 times, an azimuth of -107.6 degrees:
+ * inward and slightly backward, through the chest. Arms lifted inward on a
+ * forward swing were 39% of arm poses and 81% of the forearms through the body.
+ * The fix is geometric because the failure is; see `clearArm`.
+ *
+ * | clearance | forearm through | hand inside | median hand distance |
+ * |-----------|-----------------|-------------|----------------------|
+ * | none      | 8.07%           | 4.27%       | 0.555                |
+ * | 0.25      | 2.71%           | 2.33%       | 0.558                |
+ * | 0.28      | 1.91%           | 1.52%       | 0.563                |
+ * | 0.31      | 1.44%           | 0.97%       | 0.570                |
+ *
+ * 0.31 is the two surfaces nearly touching, and it costs the poses 0.015 of
+ * median hand distance: arms that were already clear are left where they were.
+ * Hands merged into the head fell from 0.34% to 0.20% as a side effect.
+ */
+const HAND_TORSO_CLEARANCE = 0.31;
+
+/**
+ * Nearest the two legs may come to each other, axis to axis, as a fraction of
+ * build.
+ *
+ * Measured as above, shins passed through each other on 17.07% of
+ * dancer-frames and thighs on 7.86% - with six dancers, a pair of legs going
+ * through each other somewhere in about two frames in three. 57% of the shin
+ * crossings were one foot landing on the other, almost always with exactly one
+ * of them planted: the free foot came to rest where the loaded one stood, a
+ * median 0.16 apart. The rest were knees knocking, and a swinging shin passing
+ * through the standing one.
+ *
+ * | gap  | shins through | thighs through | median stance |
+ * |------|---------------|----------------|---------------|
+ * | none | 17.07%        | 7.86%          | 0.344         |
+ * | 0.16 |  2.64%        | 0.66%          | 0.373         |
+ * | 0.19 |  1.80%        | 0.45%          | 0.389         |
+ * | 0.22 |  1.35%        | 0.35%          | 0.410         |
+ * | 0.28 |  0.73%        | 0.19%          | 0.521         |
+ *
+ * 0.19 is two drawn legs brushing - they are 0.214 wide - without overlapping.
+ * It must stay under the hips' own spacing, 0.248: past that, legs hanging
+ * straight and parallel count as too close and every stance splays. 0.28
+ * widened the median stance by half, which is the limp `MIN_LEG_SPREAD`'s
+ * narrow floor exists to avoid. At 0.19 the median moves 13%, and what moves
+ * is the feet that were standing on each other.
+ */
+const MIN_LIMB_GAP = 0.19;
+
+/**
+ * Move a point out of the torso by the shortest way.
+ *
+ * Radially from the torso's axis, which is the nearest exit and does the
+ * right thing in every case that matters: a hand hanging at the side goes
+ * out to the side, which is the arm opening from the body; a hand reaching
+ * across the chest has already passed the axis in front, so it goes forward
+ * and keeps its reach; a hand behind goes back.
+ *
+ * @param {number[]} point In the chest's frame: chest at the origin, rotated
+ *   by the chest's yaw.
+ * @param {number[]} hips The hips, in the same frame.
+ * @param {number} radius Clearance from the axis.
+ * @returns {number[]|null} The moved point, or null when it was already clear.
+ */
+function outOfTorso(point, hips, radius) {
+  const axis = sub([0, 0, 0], hips);
+  const along = Math.max(0, Math.min(1,
+    dot3(sub(point, hips), axis) / Math.max(1e-9, dot3(axis, axis))));
+  const nearest = add(hips, [axis[0] * along, axis[1] * along, axis[2] * along]);
+  const away = sub(point, nearest);
+  const distance = Math.hypot(away[0], away[1], away[2]);
+  if (distance >= radius) return null;
+  // Exactly on the axis has no nearest side; forward is the one a gesture
+  // there is almost certainly making.
+  const direction = distance > 1e-6
+    ? [away[0] / distance, away[1] / distance, away[2] / distance]
+    : [0, 0, 1];
+  return add(nearest, [direction[0] * radius, direction[1] * radius, direction[2] * radius]);
+}
+
+/** Dot product of two 3-vectors. */
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/**
+ * Closest approach of two segments: the distance, and where on each it falls.
+ *
+ * @returns {{distance: number, a: number[], b: number[]}}
+ */
+function segmentGap(p1, q1, p2, q2) {
+  const d1 = sub(q1, p1);
+  const d2 = sub(q2, p2);
+  const r = sub(p1, p2);
+  const a = dot3(d1, d1);
+  const e = dot3(d2, d2);
+  const f = dot3(d2, r);
+  let s1 = 0;
+  let t1 = 0;
+  if (a > 1e-12 && e > 1e-12) {
+    const c = dot3(d1, r);
+    const b = dot3(d1, d2);
+    const den = a * e - b * b;
+    s1 = den > 1e-12 ? Math.max(0, Math.min(1, (b * f - c * e) / den)) : 0;
+    t1 = (b * s1 + f) / e;
+    if (t1 < 0) {
+      t1 = 0;
+      s1 = Math.max(0, Math.min(1, -c / a));
+    } else if (t1 > 1) {
+      t1 = 1;
+      s1 = Math.max(0, Math.min(1, (b - c) / a));
+    }
+  } else if (e > 1e-12) {
+    t1 = Math.max(0, Math.min(1, f / e));
+  } else if (a > 1e-12) {
+    s1 = Math.max(0, Math.min(1, -dot3(d1, r) / a));
+  }
+  const onA = add(p1, [d1[0] * s1, d1[1] * s1, d1[2] * s1]);
+  const onB = add(p2, [d2[0] * t1, d2[1] * t1, d2[2] * t1]);
+  const gap = sub(onA, onB);
+  return { distance: Math.hypot(gap[0], gap[1], gap[2]), a: onA, b: onB };
+}
+
+/**
+ * Keep an arm's elbow and hand out of the torso, re-solving the arm to reach.
+ *
+ * The shoulder itself sits inside the trunk's drawn width - 0.20 of a build
+ * out against 0.225 - so an arm that heads inward has its elbow in the body
+ * even once the hand is clear, and moving the hand alone left 7.4% of
+ * forearms passing through. Both joints are checked; whichever is inside
+ * moves the hand by its own shortfall, and the arm is solved again. A few
+ * passes, because solving moves the elbow too.
+ *
+ * @returns {{joint: number[], end: number[]}} The arm, in the shoulder's frame.
+ */
+function clearArm(solved, shoulder, hips, radius, upper, lower) {
+  let arm = solved;
+  for (let pass = 0; pass < 3; pass++) {
+    const hand = add(shoulder, arm.end);
+    const elbow = add(shoulder, arm.joint);
+    const handOut = outOfTorso(hand, hips, radius);
+    const elbowOut = outOfTorso(elbow, hips, radius);
+    if (!handOut && !elbowOut) return arm;
+    let target = handOut ?? hand;
+    if (elbowOut) target = add(target, sub(elbowOut, elbow));
+    const reach = aimAt(sub(target, shoulder), upper + lower);
+    arm = limb(reach.elevation, reach.azimuth, reach.extend, upper, lower, -1);
+  }
+  return arm;
+}
+
+/**
  * Longest a hand may linger by the head, in seconds.
  *
  * Far shorter than {@link MAX_TUCK_SEC}, and it has to be. The torso is
@@ -4309,21 +4470,26 @@ export class StickMenVisual {
     // Elbows and knees, marked so limb articulation is visible.
 
     // Trunk, thicker so the body has mass.
-    bones.push({ a: root, b: chest, w: limbPx * 2.10 });
+    bones.push({ a: root, b: chest, w: limbPx * 2.10, part: 'torso' });
     // Shoulder bar: what gives the figure width across the top.
     bones.push({
       a: add(chest, rotY([shoulderHalf, 0, 0], chestYaw)),
       b: add(chest, rotY([-shoulderHalf, 0, 0], chestYaw)),
       w: limbPx * 1.20,
+      part: 'torso',
     });
     // Hip bar, so legs emerge from a body rather than a point.
     bones.push({
       a: add(root, rotY([shoulderHalf * 0.62, 0, 0], yaw)),
       b: add(root, rotY([-shoulderHalf * 0.62, 0, 0], yaw)),
       w: limbPx * 1.40,
+      part: 'torso',
     });
     // Neck.
-    bones.push({ a: chest, b: head, w: limbPx * 1.05 });
+    bones.push({ a: chest, b: head, w: limbPx * 1.05, part: 'torso', neck: true });
+
+    // The hips in the arms' frame, for the torso clearance below.
+    const hipsInChest = rotY(sub(root, chest), -chestYaw);
 
     pose.arms.forEach((arm, side) => {
       const sign = side === 0 ? 1 : -1;
@@ -4340,21 +4506,28 @@ export class StickMenVisual {
       // backward and the other forward, and neither was reliably anatomical.
       // Both arms bend the same way relative to the body, which is what stops
       // the joints looking inverted.
-      const solved = limb(
-        // Negative: an elbow protrudes *behind* the line from shoulder to hand.
-        // Positive put it in front, which is why arms appeared to bend the wrong
-        // way at every pose.
-        aimed.elevation, aimed.azimuth, aimed.extend, upperArm, foreArm, -1,
+      const solved = clearArm(
+        limb(
+          // Negative: an elbow protrudes *behind* the line from shoulder to hand.
+          // Positive put it in front, which is why arms appeared to bend the wrong
+          // way at every pose.
+          aimed.elevation, aimed.azimuth, aimed.extend, upperArm, foreArm, -1,
+        ),
+        // Out of the trunk, and solved again to reach: see HAND_TORSO_CLEARANCE.
+        [sign * shoulderHalf, 0, 0], hipsInChest, HAND_TORSO_CLEARANCE * s,
+        upperArm, foreArm,
       );
       const elbow = add(shoulder, rotY(solved.joint, chestYaw));
       let hand = add(shoulder, rotY(solved.end, chestYaw));
       hand = this.applyLag(dancer.lag.hands, side, hand, deltaSec, 8 * dancer.looseness);
-      bones.push({ a: shoulder, b: elbow, w: limbPx });
-      bones.push({ a: elbow, b: hand, w: limbPx * 0.95 });
+      bones.push({ a: shoulder, b: elbow, w: limbPx, part: `arm${side}`, attached: 0.35 });
+      bones.push({ a: elbow, b: hand, w: limbPx * 0.95, part: `arm${side}` });
     });
 
     const legSpan = thigh + shin;
-    pose.legs.forEach((leg, side) => {
+    // Both legs are aimed before either is planted, because where one may go
+    // depends on where the other stands. See MIN_LIMB_GAP.
+    const legs = pose.legs.map((leg, side) => {
       const sign = side === 0 ? 1 : -1;
       const hip = add(root, rotY([sign * shoulderHalf * 0.62, 0, 0], yaw));
       // Legs spread wider too, so a stance reads as a stance.
@@ -4365,8 +4538,13 @@ export class StickMenVisual {
       const freeSolved = limb(
         freeAim.elevation, freeAim.azimuth, freeAim.extend, thigh, shin, 1,
       );
-      const freeFoot = add(hip, rotY(freeSolved.end, yaw));
+      return {
+        side, hip, freeAim, freeSolved, freeFoot: add(hip, rotY(freeSolved.end, yaw)),
+      };
+    });
+    this.separateLegs(dancer, legs, yaw, legSpan, thigh, shin, MIN_LIMB_GAP * s);
 
+    legs.forEach(({ side, hip, freeAim, freeSolved, freeFoot }) => {
       const aim = this.updatePlant(
         dancer, side, hip, yaw, freeFoot, freeAim, freeSolved.end, legSpan, deltaSec,
       );
@@ -4397,17 +4575,28 @@ export class StickMenVisual {
         14 * dancer.looseness + dancer.plant[side].strength * 400,
       );
 
-      bones.push({ a: hip, b: knee, w: limbPx * 1.16 });
-      bones.push({ a: knee, b: foot, w: limbPx * 1.04 });
+      bones.push({ a: hip, b: knee, w: limbPx * 1.16, part: `leg${side}`, attached: 0.3 });
+      bones.push({ a: knee, b: foot, w: limbPx * 1.04, part: `leg${side}` });
     });
 
-    // Drawn twice: a wider light pass, then the black silhouette on top.
+    // Drawn part by part - torso, head, each arm, each leg - far to near, each
+    // part's light rim and then its black body before the next part begins.
     //
-    // The outline is what makes a pose readable. A solid black figure against a
-    // saturated backdrop loses its internal edges entirely - an arm crossing the
-    // torso simply disappears into it - so the silhouette shows the outer shape
-    // and nothing of what the limbs are doing. A light rim restores those edges
-    // without turning the figure into line art.
+    // The rim is what makes a pose readable: a solid black figure against a
+    // saturated backdrop keeps its outer shape and loses every internal edge.
+    // It used to be one pass of rims for the whole figure and then one pass of
+    // bodies, which kept the outer edge and nothing else - the torso's black,
+    // drawn in the second pass, covered the rim of any arm crossing in front of
+    // it. An arm folded across the chest vanished into one mass, two dancers
+    // overlapping read as a single blob, and a raised hand merged into the head
+    // it was in front of. The comment here claimed the rim restored those edges;
+    // the order of the passes meant it never did.
+    //
+    // Nearest last, so a limb in front of the body lays its rim over it, and a
+    // hand behind the back is cut off by the torso's rim instead - which is what
+    // tells the eye which is in front. Compared on the same paused frames in the
+    // preview harness, six dancers: arms across chests and legs against legs read
+    // as separate limbs where the single pass showed one black shape.
     context.lineCap = 'round';
     context.lineJoin = 'round';
 
@@ -4417,7 +4606,9 @@ export class StickMenVisual {
       const pa = this.project(bone.a, width, height);
       const pb = this.project(bone.b, width, height);
       if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
-      projected.push({ pa, pb, w: bone.w });
+      projected.push({
+        pa, pb, w: bone.w, part: bone.part, attached: bone.attached ?? 0, neck: bone.neck === true,
+      });
     }
     const pHead = this.project(head, width, height);
 
@@ -4425,24 +4616,149 @@ export class StickMenVisual {
     // every pose look like the same rounded blob.
     const outlinePx = Math.max(1, limbPx * 0.15);
 
-    for (const pass of ['outline', 'body']) {
-      const isOutline = pass === 'outline';
-      // A soft near-white rather than pure white, which would read as a glow.
-      context.strokeStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
-      context.fillStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
+    const parts = new Map();
+    const partOf = (key) => {
+      const part = parts.get(key) ?? { bones: [], depth: 0, points: 0, head: null };
+      parts.set(key, part);
+      return part;
+    };
+    for (const bone of projected) {
+      const part = partOf(bone.part);
+      part.bones.push(bone);
+      part.depth += bone.pa.depth + bone.pb.depth;
+      part.points += 2;
+    }
+    if (Number.isFinite(pHead.x)) {
+      const part = partOf('head');
+      part.head = pHead;
+      part.depth += pHead.depth;
+      part.points += 1;
+    }
+    const neck = projected.find((bone) => bone.neck);
+    const order = [...parts.values()]
+      .sort((a, b) => b.depth / b.points - a.depth / a.points);
 
-      for (const bone of projected) {
-        context.lineWidth = bone.w + (isOutline ? outlinePx * 2 : 0);
-        context.beginPath();
-        context.moveTo(bone.pa.x, bone.pa.y);
-        context.lineTo(bone.pb.x, bone.pb.y);
-        context.stroke();
+    for (const part of order) {
+      for (const isOutline of [true, false]) {
+        // A soft near-white rather than pure white, which would read as a glow.
+        context.strokeStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
+        context.fillStyle = isOutline ? 'rgba(255,255,255,0.85)' : '#000';
+        for (const bone of part.bones) {
+          context.lineWidth = bone.w + (isOutline ? outlinePx * 2 : 0);
+          // The rim of a limb's first bone starts clear of the body. Drawn from
+          // the joint, it cut a white seam across the shoulder or hip, where the
+          // limb is not crossing anything - it is attached.
+          const from = isOutline ? bone.attached : 0;
+          context.beginPath();
+          context.moveTo(
+            bone.pa.x + (bone.pb.x - bone.pa.x) * from,
+            bone.pa.y + (bone.pb.y - bone.pa.y) * from,
+          );
+          context.lineTo(bone.pb.x, bone.pb.y);
+          context.stroke();
+        }
+        if (part.head) {
+          context.beginPath();
+          context.arc(part.head.x, part.head.y, headPx + (isOutline ? outlinePx : 0), 0, Math.PI * 2);
+          context.fill();
+          // The neck laid back over the head's rim, so the head does not read as
+          // a ball sitting on the body with a white line under its chin.
+          if (isOutline && neck) {
+            context.strokeStyle = '#000';
+            context.lineWidth = neck.w;
+            context.beginPath();
+            context.moveTo(neck.pa.x, neck.pa.y);
+            context.lineTo(neck.pb.x, neck.pb.y);
+            context.stroke();
+          }
+        }
       }
+    }
+  }
 
-      if (Number.isFinite(pHead.x)) {
-        context.beginPath();
-        context.arc(pHead.x, pHead.y, headPx + (isOutline ? outlinePx : 0), 0, Math.PI * 2);
-        context.fill();
+  /**
+   * Keep the two legs out of each other.
+   *
+   * Works on the *free* aims, before planting, because `updatePlant` pins a foot
+   * at its free target the moment it takes weight: a foot moved clear only after
+   * that would plant back in the old spot and slide there, which is the skating
+   * the planting exists to prevent. Each leg is judged as `updatePlant` will
+   * draw it - a planted one blended towards its pin by how firmly it is planted
+   * - and the lighter-loaded leg yields, in proportion. A free foot placed better
+   * is a step; a planted one moved is a skid.
+   *
+   * Thighs and shins both, and the whole of each, because feet were only half
+   * of it: knees knocking and one shin passing through the other made up 35% of
+   * the crossings. Pushed horizontally, so a foot kicked up past the other is
+   * judged by the real distance between them and left alone.
+   *
+   * @param {object} dancer
+   * @param {{side: number, hip: number[], freeAim: object, freeSolved: object,
+   *   freeFoot: number[]}[]} legs Mutated: a leg that yields is re-aimed.
+   * @param {number} yaw
+   * @param {number} span Leg length, hip to foot.
+   * @param {number} thigh
+   * @param {number} shin
+   * @param {number} gap Smallest distance allowed between the two legs.
+   */
+  separateLegs(dancer, legs, yaw, span, thigh, shin, gap) {
+    const drawn = (leg) => {
+      const plant = dancer.plant[leg.side];
+      const k = plant.point ? plant.strength : 0;
+      let solved = leg.freeSolved;
+      if (k > 0.002) {
+        const pinned = rotY(sub(plant.point, leg.hip), -yaw);
+        const free = leg.freeSolved.end;
+        const aim = aimAt([
+          free[0] + (pinned[0] - free[0]) * k,
+          free[1] + (pinned[1] - free[1]) * k,
+          free[2] + (pinned[2] - free[2]) * k,
+        ], span);
+        solved = limb(aim.elevation, aim.azimuth, aim.extend, thigh, shin, 1);
+      }
+      return {
+        knee: add(leg.hip, rotY(solved.joint, yaw)),
+        foot: add(leg.hip, rotY(solved.end, yaw)),
+        load: k,
+      };
+    };
+
+    for (let pass = 0; pass < 3; pass++) {
+      const [a, b] = legs.map(drawn);
+      const shins = segmentGap(a.knee, a.foot, b.knee, b.foot);
+      const thighs = segmentGap(legs[0].hip, a.knee, legs[1].hip, b.knee);
+      const worst = shins.distance <= thighs.distance ? shins : thighs;
+      if (worst.distance >= gap) return;
+
+      // Apart along the line between the closest points, flattened: legs stand
+      // on a floor, and lifting one to clear the other is not a step anyone takes.
+      let dx = worst.b[0] - worst.a[0];
+      let dz = worst.b[2] - worst.a[2];
+      const across = Math.hypot(dx, dz);
+      if (across < 1e-6) {
+        // Coincident: part them along the hips, each to its own side. Leg 0 is
+        // the +x side of the body, so leg 1 lies towards -x.
+        const lateral = rotY([1, 0, 0], yaw);
+        dx = -lateral[0];
+        dz = -lateral[2];
+      } else {
+        dx /= across;
+        dz /= across;
+      }
+      const deficit = gap - worst.distance;
+      const loads = a.load + b.load;
+      // Each leg moves in proportion to the *other* one's load.
+      const share = loads < 1e-6 ? [0.5, 0.5] : [b.load / loads, a.load / loads];
+      for (const leg of legs) {
+        const push = deficit * share[leg.side] * (leg.side === 0 ? -1 : 1);
+        if (Math.abs(push) < 1e-9) continue;
+        const target = [
+          leg.freeFoot[0] + dx * push, leg.freeFoot[1], leg.freeFoot[2] + dz * push,
+        ];
+        const aim = aimAt(rotY(sub(target, leg.hip), -yaw), span);
+        leg.freeAim = { elevation: aim.elevation, azimuth: aim.azimuth, extend: aim.extend };
+        leg.freeSolved = limb(aim.elevation, aim.azimuth, aim.extend, thigh, shin, 1);
+        leg.freeFoot = add(leg.hip, rotY(leg.freeSolved.end, yaw));
       }
     }
   }
